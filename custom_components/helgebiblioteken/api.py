@@ -5,10 +5,10 @@ from __future__ import annotations
 import asyncio
 import re
 import socket
-from urllib.parse import urljoin
 from datetime import UTC, datetime
 from logging import getLogger
 from typing import Any
+from urllib.parse import urljoin
 
 import aiohttp
 from bs4 import BeautifulSoup
@@ -658,8 +658,8 @@ class HelgebibliotekenApiClient:
         """Find the 'next page' link in the loans portlet for pagination."""
         if not loans_portlet:
             return None
-        # Common patterns: "Nästa" (Swedish), "Next", "»", "›", or rel="next"
-        next_patterns = ("nästa", "next", "»", "›", "följande")
+        # Common patterns: "Nästa" (Swedish), "Next", "»", U+203A, or rel="next"
+        next_patterns = ("nästa", "next", "»", "\u203a", "följande")
         for anchor in loans_portlet.find_all("a", href=True):
             href = anchor.get("href", "").strip()
             if (

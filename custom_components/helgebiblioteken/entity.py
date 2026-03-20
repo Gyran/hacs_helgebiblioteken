@@ -34,7 +34,7 @@ class HelgebibliotekenEntity(CoordinatorEntity[HelgebibliotekenDataUpdateCoordin
 
     @property
     def suggested_object_id(self) -> str | None:
-        """Return object_id with prefix so entity_id is e.g. sensor.helgebiblioteken_loan_count."""
+        """Return object_id with prefix (e.g. sensor.helgebiblioteken_loan_count)."""
         if hasattr(self, "entity_description") and self.entity_description.key:
             return self.entity_description.key
 

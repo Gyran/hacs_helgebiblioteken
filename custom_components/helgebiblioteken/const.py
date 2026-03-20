@@ -12,7 +12,7 @@ ATTRIBUTION: Final[str] = "Data provided by HelGe-biblioteken"
 
 # Read version from manifest for frontend module registration
 _MANIFEST_PATH = Path(__file__).parent / "manifest.json"
-with open(_MANIFEST_PATH, encoding="utf-8") as _f:
+with _MANIFEST_PATH.open(encoding="utf-8") as _f:
     INTEGRATION_VERSION: Final[str] = json.load(_f).get("version", "0.0.0")
 
 # Base URL for frontend resources (Lovelace card)

@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING
 import aiohttp
 from aiohttp.resolver import ThreadedResolver
 from homeassistant.const import CONF_PASSWORD, CONF_USERNAME, Platform
-from homeassistant.core import HomeAssistant
+from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.start import async_at_start
 from homeassistant.loader import async_get_loaded_integration
 
@@ -25,7 +25,7 @@ from .data import HelgebibliotekenData
 from .frontend import JSModuleRegistration
 
 if TYPE_CHECKING:
-    from homeassistant.core import ServiceCall
+    from homeassistant.core import HomeAssistant, ServiceCall
 
     from .data import HelgebibliotekenConfigEntry
 
@@ -34,10 +34,11 @@ PLATFORMS: list[Platform] = [
     Platform.BUTTON,
 ]
 
+CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
+
 
 async def async_setup(hass: HomeAssistant, _config: dict) -> bool:
     """Set up the Helgebiblioteken integration (frontend only)."""
-
     # Register static path + extra_js as soon as HA is starting (not only after
     # EVENT_HOMEASSISTANT_STARTED), so index.html includes the card module before
     # the Lovelace card picker loads (otherwise the custom element never appears
