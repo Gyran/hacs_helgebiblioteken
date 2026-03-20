@@ -1,0 +1,30 @@
+{
+    "config": {
+        "step": {
+            "user": {
+                "description": "Personnummer as 10 digits (ÅÅMMDDXXXX).",
+                "data": {
+                    "username": "Personnummer",
+                    "password": "PIN"
+                }
+            }
+        },
+        "error": {
+            "auth": "Personnummer/PIN is wrong.",
+            "connection": "Unable to connect to the server.",
+            "invalid_personnummer": "Enter personnummer as 10 digits (ÅÅMMDDXXXX).",
+            "unknown": "Unknown error occurred."
+        },
+        "abort": {
+            "already_configured": "This entry is already configured.",
+            "reauth_failed_missing_entry": "Re-authentication failed: could not find the configuration entry.",
+            "reauth_successful": "Re-authentication was successful."
+        }
+    },
+    "services": {
+        "refresh": {
+            "name": "Refresh",
+            "description": "Force a refresh of loan data from HelGe-biblioteken."
+        }
+    }
+}

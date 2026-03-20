@@ -1,0 +1,30 @@
+{
+    "config": {
+        "step": {
+            "user": {
+                "description": "Personnummer som 10 siffror (ÅÅMMDDXXXX).",
+                "data": {
+                    "username": "Personnummer",
+                    "password": "PIN-kod"
+                }
+            }
+        },
+        "error": {
+            "auth": "Personnummer/PIN-kod är felaktigt.",
+            "connection": "Kunde inte ansluta till servern.",
+            "invalid_personnummer": "Ange personnummer som 10 siffror (ÅÅMMDDXXXX).",
+            "unknown": "Ett okänt fel uppstod."
+        },
+        "abort": {
+            "already_configured": "Denna konfiguration är redan konfigurerad.",
+            "reauth_failed_missing_entry": "Omautentisering misslyckades: kunde inte hitta konfigurationsposten.",
+            "reauth_successful": "Omautentiseringen lyckades."
+        }
+    },
+    "services": {
+        "refresh": {
+            "name": "Uppdatera",
+            "description": "Tvinga en uppdatering av lånedata från HelGe-biblioteken."
+        }
+    }
+}

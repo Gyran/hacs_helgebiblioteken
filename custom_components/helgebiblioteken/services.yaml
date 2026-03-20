@@ -1,0 +1,9 @@
+refresh:
+  name: Refresh
+  description: Force a refresh of loan data from HelGe-biblioteken.
+  fields:
+    entry_id:
+      name: Entry ID
+      description: Optional entry ID to refresh a specific integration instance. If not provided, all instances will be refreshed.
+      selector:
+        text:
