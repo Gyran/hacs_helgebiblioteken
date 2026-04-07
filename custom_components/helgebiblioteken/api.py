@@ -7,7 +7,7 @@ import re
 import socket
 from datetime import UTC, datetime
 from logging import getLogger
-from typing import Any
+from typing import Any, NoReturn
 from urllib.parse import urljoin
 
 import aiohttp
@@ -37,6 +37,11 @@ class HelgebibliotekenApiClientAuthenticationError(
     HelgebibliotekenApiClientError,
 ):
     """Exception to indicate an authentication error."""
+
+
+def _raise_session_expired() -> NoReturn:
+    msg = "Session expired, please try again"
+    raise HelgebibliotekenApiClientAuthenticationError(msg)
 
 
 def _verify_response_or_raise(response: aiohttp.ClientResponse) -> None:
@@ -556,10 +561,7 @@ class HelgebibliotekenApiClient:
                         if not_logged_in:
                             _LOGGER.warning("Session expired - not logged in on page")
                             self._logged_in = False
-                            msg = "Session expired, please try again"
-                            raise HelgebibliotekenApiClientAuthenticationError(
-                                msg,
-                            )  # noqa: TRY301
+                            _raise_session_expired()
 
                         loans_portlet = self._find_loans_portlet(soup)
                         if not loans_portlet:
@@ -577,10 +579,7 @@ class HelgebibliotekenApiClient:
                         if "du har inte loggat in" in portlet_text:
                             _LOGGER.warning("Not logged in message found in portlet")
                             self._logged_in = False
-                            msg = "Session expired, please try again"
-                            raise HelgebibliotekenApiClientAuthenticationError(
-                                msg,
-                            )  # noqa: TRY301
+                            _raise_session_expired()
 
                         # On first page only: "Lån saknas" means no loans at all
                         if page_num == 1:
@@ -599,9 +598,7 @@ class HelgebibliotekenApiClient:
                         )
                         all_loans.extend(page_loans)
 
-                        next_url = self._find_next_page_link(
-                            loans_portlet, current_url
-                        )
+                        next_url = self._find_next_page_link(loans_portlet, current_url)
                         if not next_url or next_url == current_url:
                             break
                         current_url = next_url
@@ -629,7 +626,8 @@ class HelgebibliotekenApiClient:
                 msg = f"Unexpected error fetching loans - {exception}"
                 raise HelgebibliotekenApiClientError(msg) from exception
 
-        raise HelgebibliotekenApiClientError("Loan fetch failed after retry")
+        msg = "Loan fetch failed after retry"
+        raise HelgebibliotekenApiClientError(msg)
 
     def _find_loans_portlet(self, soup: BeautifulSoup) -> Any:
         """Find the loans portlet in the HTML."""
