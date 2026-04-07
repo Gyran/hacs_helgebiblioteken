@@ -524,93 +524,112 @@ class HelgebibliotekenApiClient:
         msg = "Login failed - unable to verify session"
         raise HelgebibliotekenApiClientAuthenticationError(msg)
 
-    async def async_get_loans(self) -> list[dict[str, Any]]:  # noqa: PLR0915
+    async def async_get_loans(self) -> list[dict[str, Any]]:  # noqa: PLR0912, PLR0915
         """Get current loans from HelGe-biblioteken, following pagination."""
         _LOGGER.debug("Fetching loans")
-        await self.async_login()
+        for attempt in range(2):
+            await self.async_login()
+            try:
+                async with asyncio.timeout(TIMEOUT):
+                    all_loans: list[dict[str, Any]] = []
+                    current_url = f"{self.BASE_URL}/protected/my-account/overview"
+                    page_num = 1
 
-        try:
-            async with asyncio.timeout(TIMEOUT):
-                all_loans: list[dict[str, Any]] = []
-                current_url = f"{self.BASE_URL}/protected/my-account/overview"
-                page_num = 1
-
-                while page_num <= MAX_LOAN_PAGES:
-                    _LOGGER.debug(
-                        "Fetching loans page %d from %s", page_num, current_url
-                    )
-
-                    async with self._session.get(current_url) as response:
-                        _LOGGER.debug("Page response status: %s", response.status)
-                        _verify_response_or_raise(response)
-                        html = await response.text()
-                        _LOGGER.debug("Page HTML length: %d bytes", len(html))
-                        soup = BeautifulSoup(html, "html.parser")
-
-                    # Check if we're still logged in
-                    html_lower = html.lower()
-                    not_logged_in = (
-                        "du har inte loggat in" in html_lower
-                        or "not logged in" in html_lower
-                    )
-                    if not_logged_in:
-                        _LOGGER.warning("Session expired - not logged in on page")
-                        self._logged_in = False
-                        msg = "Session expired, please try again"
-                        raise HelgebibliotekenApiClientAuthenticationError(msg)  # noqa: TRY301
-
-                    loans_portlet = self._find_loans_portlet(soup)
-                    if not loans_portlet:
-                        if page_num == 1:
-                            _LOGGER.warning("Loans portlet not found in HTML")
-                            all_divs = soup.find_all(
-                                "div", id=re.compile(r".*loan.*", re.IGNORECASE)
-                            )
-                            _LOGGER.debug(
-                                "Found %d divs with 'loan' in ID", len(all_divs)
-                            )
-                        break
-
-                    portlet_text = loans_portlet.get_text().lower()
-                    if "du har inte loggat in" in portlet_text:
-                        _LOGGER.warning("Not logged in message found in portlet")
-                        self._logged_in = False
-                        msg = "Session expired, please try again"
-                        raise HelgebibliotekenApiClientAuthenticationError(msg)  # noqa: TRY301
-
-                    # On first page only: "Lån saknas" means no loans at all
-                    if page_num == 1:
-                        no_loans_msg = loans_portlet.find(
-                            string=re.compile(r"lån saknas", re.IGNORECASE)
+                    while page_num <= MAX_LOAN_PAGES:
+                        _LOGGER.debug(
+                            "Fetching loans page %d from %s", page_num, current_url
                         )
-                        if no_loans_msg:
-                            _LOGGER.debug("No loans message found - user has no loans")
-                            return []
 
-                    page_loans = self._parse_loans(loans_portlet)
-                    _LOGGER.debug(
-                        "Parsed %d loans on page %d", len(page_loans), page_num
+                        async with self._session.get(current_url) as response:
+                            _LOGGER.debug("Page response status: %s", response.status)
+                            _verify_response_or_raise(response)
+                            html = await response.text()
+                            _LOGGER.debug("Page HTML length: %d bytes", len(html))
+                            soup = BeautifulSoup(html, "html.parser")
+
+                        # Check if we're still logged in
+                        html_lower = html.lower()
+                        not_logged_in = (
+                            "du har inte loggat in" in html_lower
+                            or "not logged in" in html_lower
+                        )
+                        if not_logged_in:
+                            _LOGGER.warning("Session expired - not logged in on page")
+                            self._logged_in = False
+                            msg = "Session expired, please try again"
+                            raise HelgebibliotekenApiClientAuthenticationError(
+                                msg,
+                            )  # noqa: TRY301
+
+                        loans_portlet = self._find_loans_portlet(soup)
+                        if not loans_portlet:
+                            if page_num == 1:
+                                _LOGGER.warning("Loans portlet not found in HTML")
+                                all_divs = soup.find_all(
+                                    "div", id=re.compile(r".*loan.*", re.IGNORECASE)
+                                )
+                                _LOGGER.debug(
+                                    "Found %d divs with 'loan' in ID", len(all_divs)
+                                )
+                            break
+
+                        portlet_text = loans_portlet.get_text().lower()
+                        if "du har inte loggat in" in portlet_text:
+                            _LOGGER.warning("Not logged in message found in portlet")
+                            self._logged_in = False
+                            msg = "Session expired, please try again"
+                            raise HelgebibliotekenApiClientAuthenticationError(
+                                msg,
+                            )  # noqa: TRY301
+
+                        # On first page only: "Lån saknas" means no loans at all
+                        if page_num == 1:
+                            no_loans_msg = loans_portlet.find(
+                                string=re.compile(r"lån saknas", re.IGNORECASE)
+                            )
+                            if no_loans_msg:
+                                _LOGGER.debug(
+                                    "No loans message found - user has no loans"
+                                )
+                                return []
+
+                        page_loans = self._parse_loans(loans_portlet)
+                        _LOGGER.debug(
+                            "Parsed %d loans on page %d", len(page_loans), page_num
+                        )
+                        all_loans.extend(page_loans)
+
+                        next_url = self._find_next_page_link(
+                            loans_portlet, current_url
+                        )
+                        if not next_url or next_url == current_url:
+                            break
+                        current_url = next_url
+                        page_num += 1
+
+                    _LOGGER.debug("Total loans after pagination: %d", len(all_loans))
+                    return all_loans
+
+            except HelgebibliotekenApiClientAuthenticationError:
+                if attempt == 0:
+                    _LOGGER.warning(
+                        "Session expired during loan fetch, re-logging in and "
+                        "retrying once"
                     )
-                    all_loans.extend(page_loans)
+                    self._logged_in = False
+                    continue
+                raise
+            except TimeoutError as exception:
+                msg = f"Timeout error fetching loans - {exception}"
+                raise HelgebibliotekenApiClientCommunicationError(msg) from exception
+            except (aiohttp.ClientError, socket.gaierror) as exception:
+                msg = f"Error fetching loans - {exception}"
+                raise HelgebibliotekenApiClientCommunicationError(msg) from exception
+            except Exception as exception:  # pylint: disable=broad-except
+                msg = f"Unexpected error fetching loans - {exception}"
+                raise HelgebibliotekenApiClientError(msg) from exception
 
-                    next_url = self._find_next_page_link(loans_portlet, current_url)
-                    if not next_url or next_url == current_url:
-                        break
-                    current_url = next_url
-                    page_num += 1
-
-                _LOGGER.debug("Total loans after pagination: %d", len(all_loans))
-                return all_loans
-
-        except TimeoutError as exception:
-            msg = f"Timeout error fetching loans - {exception}"
-            raise HelgebibliotekenApiClientCommunicationError(msg) from exception
-        except (aiohttp.ClientError, socket.gaierror) as exception:
-            msg = f"Error fetching loans - {exception}"
-            raise HelgebibliotekenApiClientCommunicationError(msg) from exception
-        except Exception as exception:  # pylint: disable=broad-except
-            msg = f"Unexpected error fetching loans - {exception}"
-            raise HelgebibliotekenApiClientError(msg) from exception
+        raise HelgebibliotekenApiClientError("Loan fetch failed after retry")
 
     def _find_loans_portlet(self, soup: BeautifulSoup) -> Any:
         """Find the loans portlet in the HTML."""
