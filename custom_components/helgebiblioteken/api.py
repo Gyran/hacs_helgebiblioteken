@@ -431,6 +431,7 @@ class HelgebibliotekenApiClient:
             if (
                 "personnummer" in name_lower
                 or "lanekort" in name_lower
+                or "opentextusername" in name_lower
                 or "personnummer" in id_lower
                 or ("signin" in id_lower and "text" in inp.get("type", "").lower())
             ):
@@ -440,6 +441,7 @@ class HelgebibliotekenApiClient:
                     _LOGGER.debug("Found personnummer field: %s", field_name)
             elif (
                 "pin" in name_lower
+                or "textpassword" in name_lower
                 or "pin" in id_lower
                 or ("signin" in id_lower and "password" in inp.get("type", "").lower())
             ):
@@ -492,9 +494,19 @@ class HelgebibliotekenApiClient:
             _LOGGER.debug("Login verified successfully - on protected page")
             return
 
+        # Portal portlet: lifecycle=0 in redirect URL after successful sign-in
+        if "patronlogin" in url_lower and "p_p_lifecycle=0" in url_lower:
+            self._logged_in = True
+            _LOGGER.debug(
+                "Login verified successfully - patronLogin lifecycle=0 redirect"
+            )
+            return
+
         # Check if we're still on the login page - if so, login failed
         if "patronlogin" in url_lower and (
-            "signin" in url_lower or "wicket:interface" in url_lower
+            "p_p_lifecycle=1" in url_lower
+            or "signin" in url_lower
+            or "wicket:interface" in url_lower
         ):
             _LOGGER.error(
                 "Login failed - still on login page after submission. "
@@ -511,14 +523,6 @@ class HelgebibliotekenApiClient:
                         _LOGGER.debug("Found error message: %s", error_text[:200])
             msg = "Login failed - still on login page"
             raise HelgebibliotekenApiClientAuthenticationError(msg)
-
-        # Also check for login indicators in HTML (and not still on login page)
-        if ("mina sidor" in html_lower or "logga ut" in html_lower) and (
-            "/start" not in url_lower or "patronlogin" not in url_lower
-        ):
-            self._logged_in = True
-            _LOGGER.debug("Login verified successfully - found login indicators")
-            return
 
         _LOGGER.error(
             "Login verification failed - response does not contain "
