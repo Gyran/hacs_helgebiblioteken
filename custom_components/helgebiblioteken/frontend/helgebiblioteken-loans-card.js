@@ -35,11 +35,11 @@ class HelgebibliotekenLoansCard extends HTMLElement {
           },
         },
       },
-      {
-        name: 'title',
-        selector: { text: {} },
-      },
     ];
+  }
+
+  static getConfigElement() {
+    return document.createElement('helgebiblioteken-loans-card-editor');
   }
 
   getCardSize() {
@@ -163,8 +163,99 @@ class HelgebibliotekenLoansCard extends HTMLElement {
   }
 }
 
+class HelgebibliotekenLoansCardEditor extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: 'open' });
+    this._hass = null;
+    this._config = {};
+  }
+
+  setConfig(config) {
+    this._config = config || {};
+    this.render();
+  }
+
+  set hass(hass) {
+    this._hass = hass;
+    this.render();
+  }
+
+  _onValueChanged(event) {
+    const nextEntity = event?.detail?.value?.entity;
+    if (nextEntity === this._config.entity) {
+      return;
+    }
+
+    this._config = {
+      type: CARD_TAG,
+      ...this._config,
+      entity: nextEntity,
+    };
+
+    this.dispatchEvent(
+      new CustomEvent('config-changed', {
+        detail: { config: this._config },
+        bubbles: true,
+        composed: true,
+      }),
+    );
+  }
+
+  render() {
+    this.shadowRoot.innerHTML = `
+      <div class="editor">
+        <div id="form-root"></div>
+      </div>
+      <style>
+        .editor {
+          display: grid;
+          gap: 12px;
+        }
+      </style>
+    `;
+
+    const formRoot = this.shadowRoot.getElementById('form-root');
+    if (!formRoot || !this._hass) {
+      return;
+    }
+
+    const form = document.createElement('ha-form');
+    form.hass = this._hass;
+    form.data = { entity: this._config.entity || '' };
+    form.schema = [
+      {
+        name: 'entity',
+        required: true,
+        selector: {
+          entity: {
+            filter: [
+              { domain: 'sensor', integration: 'helgebiblioteken' },
+            ],
+          },
+        },
+      },
+    ];
+    form.addEventListener('value-changed', (event) => this._onValueChanged(event));
+    formRoot.appendChild(form);
+  }
+}
+
 const CARD_TAG = 'helgebiblioteken-loans-card';
 
 if (!customElements.get(CARD_TAG)) {
   customElements.define(CARD_TAG, HelgebibliotekenLoansCard);
+}
+if (!customElements.get('helgebiblioteken-loans-card-editor')) {
+  customElements.define('helgebiblioteken-loans-card-editor', HelgebibliotekenLoansCardEditor);
+}
+
+window.customCards = window.customCards || [];
+if (!window.customCards.some((card) => card.type === CARD_TAG)) {
+  window.customCards.push({
+    type: CARD_TAG,
+    name: 'Helgebiblioteken Loans Card',
+    description: 'Show active Helgebiblioteken loans',
+    preview: true,
+  });
 }
