@@ -261,7 +261,7 @@ class HelgebibliotekenApiClient:
             )
 
         # Search within portlet if found
-        search_area = login_portlet if login_portlet else soup
+        search_area = login_portlet or soup
         all_inputs = search_area.find_all("input")
 
         for inp in all_inputs:
@@ -276,12 +276,12 @@ class HelgebibliotekenApiClient:
             # Look for Wicket field patterns related to signIn
             if "signIn" in inp_id.lower() or "signIn" in inp_name.lower():
                 if "text" in inp_type:
-                    field_name = inp_name if inp_name else inp_id
+                    field_name = inp_name or inp_id
                     if field_name:
                         form_fields[field_name] = self._username
                         _LOGGER.debug("Found potential username field: %s", field_name)
                 elif "password" in inp_type:
-                    field_name = inp_name if inp_name else inp_id
+                    field_name = inp_name or inp_id
                     if field_name:
                         form_fields[field_name] = self._password
                         _LOGGER.debug("Found potential password field: %s", field_name)
@@ -302,7 +302,7 @@ class HelgebibliotekenApiClient:
             )
 
         # Search within portlet if found, otherwise search all
-        search_area = login_portlet if login_portlet else soup
+        search_area = login_portlet or soup
 
         # Filter out search inputs
         all_inputs = search_area.find_all("input", {"type": ["text", "password"]})
@@ -390,9 +390,7 @@ class HelgebibliotekenApiClient:
                     break
 
         # If no specific login form found, search within portlet or all inputs
-        search_area = (
-            login_form if login_form else (login_portlet if login_portlet else soup)
-        )
+        search_area = login_form or (login_portlet or soup)
 
         # Find all text and password inputs within the search area
         login_inputs = search_area.find_all(
@@ -436,7 +434,7 @@ class HelgebibliotekenApiClient:
                 or "personnummer" in id_lower
                 or ("signin" in id_lower and "text" in inp.get("type", "").lower())
             ):
-                field_name = name if name else inp_id
+                field_name = name or inp_id
                 if field_name:
                     form_fields[field_name] = self._username
                     _LOGGER.debug("Found personnummer field: %s", field_name)
@@ -446,7 +444,7 @@ class HelgebibliotekenApiClient:
                 or "pin" in id_lower
                 or ("signin" in id_lower and "password" in inp.get("type", "").lower())
             ):
-                field_name = name if name else inp_id
+                field_name = name or inp_id
                 if field_name:
                     form_fields[field_name] = self._password
                     _LOGGER.debug("Found PIN field: %s", field_name)
@@ -727,7 +725,7 @@ class HelgebibliotekenApiClient:
             td_cells = row.find_all("td")
             if len(th_cells) == len(all_cells) and len(all_cells) > 0:
                 continue
-            cells = td_cells if td_cells else all_cells
+            cells = td_cells or all_cells
             if len(cells) < MIN_TABLE_CELLS:
                 continue
 
@@ -759,7 +757,7 @@ class HelgebibliotekenApiClient:
             if year_match:
                 try:
                     year = int(year_match.group(1))
-                except (ValueError, IndexError):
+                except ValueError, IndexError:
                     year = None
             media_type = media_match.group(1).strip() if media_match else ""
             borrowed_info = borrowed_match.group(1).strip() if borrowed_match else ""
@@ -805,7 +803,7 @@ class HelgebibliotekenApiClient:
                 if renewal_match:
                     try:
                         renewal_count = int(renewal_match.group(1))
-                    except (ValueError, IndexError):
+                    except ValueError, IndexError:
                         renewal_count = None
 
             checkbox = row.find("input", {"name": "loansCheckboxGroup"})
@@ -1057,7 +1055,7 @@ class HelgebibliotekenApiClient:
                 continue
             try:
                 due = date.fromisoformat(due_date)
-            except (TypeError, ValueError):
+            except TypeError, ValueError:
                 continue
             if (due - today).days <= days and str(loan_id) not in due_soon_ids:
                 due_soon_ids.append(str(loan_id))

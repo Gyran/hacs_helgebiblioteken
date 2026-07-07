@@ -106,7 +106,7 @@ class HelgebibliotekenFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
         # Get the entry being reauth'd
         try:
             reauth_entry = self._get_reauth_entry()
-        except (ValueError, KeyError):
+        except ValueError, KeyError:
             # If we can't get the entry yet, return an error
             return self.async_abort(reason="reauth_failed_missing_entry")
 

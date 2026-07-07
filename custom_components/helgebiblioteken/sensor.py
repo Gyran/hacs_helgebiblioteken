@@ -140,7 +140,7 @@ class NextLoanExpirySensor(HelgebibliotekenEntity, SensorEntity):
                 due_date = date.fromisoformat(due_date_str)
                 if earliest_date is None or due_date < earliest_date:
                     earliest_date = due_date
-            except (ValueError, TypeError):
+            except ValueError, TypeError:
                 # Skip invalid dates
                 continue
 
@@ -170,7 +170,7 @@ class NextLoanExpirySensor(HelgebibliotekenEntity, SensorEntity):
                 if earliest_date is None or due_date < earliest_date:
                     earliest_date = due_date
                     earliest_loan = loan
-            except (ValueError, TypeError):
+            except ValueError, TypeError:
                 continue
 
         if earliest_loan:
