@@ -1,5 +1,7 @@
 # Helgebiblioteken
 
+![Helgebiblioteken logo](custom_components/helgebiblioteken/brand/logo.png)
+
 A Home Assistant custom integration for HelGe-biblioteken that allows you to track your library loans and get notifications about upcoming due dates.
 
 ## Features
@@ -65,6 +67,16 @@ The integration creates the following entities:
 
 - [Issue Tracker](https://github.com/gyran/hacs_helgebiblioteken/issues)
 - [Documentation](https://github.com/gyran/hacs_helgebiblioteken)
+
+## Brand & logo
+
+Icons and logos live in [`custom_components/helgebiblioteken/brand/`](custom_components/helgebiblioteken/brand/). Home Assistant **2026.3+** loads them automatically (see [brand images](https://developers.home-assistant.io/docs/core/integration/brand_images)).
+
+They are generated from the **official** HelGe assets on Axiell’s CDN (square + wide logo). Details and refresh steps: [`brand/README.md`](custom_components/helgebiblioteken/brand/README.md).
+
+To **re-download and resize** after upstream changes:
+
+`python3 -m pip install -r scripts/requirements-brand.txt` then `python3 scripts/generate_brand_images.py`
 
 ## License
 
