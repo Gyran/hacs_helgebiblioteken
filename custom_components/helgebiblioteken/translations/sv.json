@@ -25,6 +25,42 @@
         "refresh": {
             "name": "Uppdatera",
             "description": "Tvinga en uppdatering av lånedata från HelGe-biblioteken."
+        },
+        "renew_loan": {
+            "name": "Låna om",
+            "description": "Låna om ett lån med låne-ID.",
+            "fields": {
+                "loan_id": {
+                    "name": "Låne-ID",
+                    "description": "Låne-ID som visas i lånelistans attribut."
+                },
+                "entity_id": {
+                    "name": "Entitet",
+                    "description": "Valfri Helgebiblioteken-sensor som används för att hitta integrationsinstansen."
+                },
+                "entry_id": {
+                    "name": "Entry ID",
+                    "description": "Valfritt entry ID för att rikta en specifik integrationsinstans."
+                }
+            }
+        },
+        "renew_due_soon": {
+            "name": "Låna om nära",
+            "description": "Låna om förnybara lån som är försenade eller går ut inom valt antal dagar.",
+            "fields": {
+                "days": {
+                    "name": "Dagar",
+                    "description": "Låna om lån som är försenade eller går ut inom detta antal dagar."
+                },
+                "entity_id": {
+                    "name": "Entitet",
+                    "description": "Valfri Helgebiblioteken-sensor som används för att hitta integrationsinstansen."
+                },
+                "entry_id": {
+                    "name": "Entry ID",
+                    "description": "Valfritt entry ID för att rikta en specifik integrationsinstans."
+                }
+            }
         }
     }
 }

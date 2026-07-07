@@ -5,7 +5,8 @@ from __future__ import annotations
 import asyncio
 import re
 import socket
-from datetime import UTC, datetime
+from collections import defaultdict
+from datetime import UTC, date, datetime
 from logging import getLogger
 from typing import Any, NoReturn
 from urllib.parse import urljoin
@@ -700,89 +701,57 @@ class HelgebibliotekenApiClient:
                 return urljoin(current_url, href)
         return None
 
-    def _parse_loans(  # noqa: PLR0912, PLR0915
+    def _parse_loan_id_from_title_cell(self, title_cell: Any) -> str | None:
+        """Parse the leading bibliographic ID from the title cell text."""
+        title_text = title_cell.get_text(" ", strip=True)
+        match = re.match(r"^\s*(\d+)", title_text)
+        return match.group(1) if match else None
+
+    def _parse_loan_rows(  # noqa: PLR0912, PLR0915
         self, loans_portlet: Any
     ) -> list[dict[str, Any]]:
-        """Parse loan information from the portlet."""
-        loans = []
-
-        # Check if portlet contains "not logged in" message
-        portlet_text = loans_portlet.get_text()
-        if "du har inte loggat in" in portlet_text.lower():
-            _LOGGER.warning("Portlet contains 'not logged in' message")
-            return loans
-
-        # Find the table with caption "Mina lån"
+        """Parse table rows with loan and renewal metadata."""
+        rows_data: list[dict[str, Any]] = []
         loans_table = loans_portlet.find("table")
         if not loans_table:
-            _LOGGER.debug("No loans table found in portlet")
-            # Log portlet structure for debugging
-            portlet_html_preview = str(loans_portlet)[:500]
-            _LOGGER.debug("Portlet HTML preview: %s", portlet_html_preview)
-            return loans
+            return rows_data
 
-        _LOGGER.debug("Found loans table, parsing rows")
-        # Data rows in tbody, header in thead; fallback: all rows
         tbody = loans_table.find("tbody")
         rows = tbody.find_all("tr") if tbody else loans_table.find_all("tr")
 
-        _LOGGER.debug("Found %d table rows", len(rows))
         for row in rows:
-            # Skip header rows - check if row is in thead or if all cells are th
             if row.find_parent("thead"):
-                _LOGGER.debug("Skipping header row (in thead)")
                 continue
-
-            # Check if all cells are th (header row) vs having td cells (data row)
             all_cells = row.find_all(["th", "td"])
             th_cells = row.find_all("th")
             td_cells = row.find_all("td")
-
-            # If all cells are th, it's a header row
             if len(th_cells) == len(all_cells) and len(all_cells) > 0:
-                _LOGGER.debug("Skipping header row (all cells are th)")
                 continue
-
-            # Prefer td cells; some rows have th scope="row" + td
             cells = td_cells if td_cells else all_cells
-
             if len(cells) < MIN_TABLE_CELLS:
-                _LOGGER.debug(
-                    "Skipping row with %d cells (need %d)",
-                    len(cells),
-                    MIN_TABLE_CELLS,
-                )
                 continue
 
-            # First cell may be th+checkbox; then title/author, due, status
-            # Find the cell with title (contains link or "Av:")
             title_cell = None
             for cell in cells:
                 cell_text = cell.get_text()
                 if cell.find("a") or "Av:" in cell_text:
                     title_cell = cell
                     break
-
             if not title_cell:
-                title_cell = cells[0]  # Fallback to first cell
+                title_cell = cells[0]
 
-            # Extract title from link
             title_link = title_cell.find("a")
             title = title_link.get_text(strip=True) if title_link else ""
+            loan_id = self._parse_loan_id_from_title_cell(title_cell)
 
-            # Extract details from text
             cell_text = title_cell.get_text()
-            # Match author, stopping before "Utgivningsår:" field
             author_match = re.search(
                 r"Av:\s*(.+?)(?=\s+Utgivningsår:|$)", cell_text, re.DOTALL
             )
-            # Match year (just digits)
             year_match = re.search(r"Utgivningsår:\s*(\d+)", cell_text)
-            # Match media type, stopping before "Lånad på:" field
             media_match = re.search(
                 r"Medietyp:\s*(.+?)(?=\s+Lånad på:|$)", cell_text, re.DOTALL
             )
-            # Match borrowed info (library and date), stopping at end or newline
             borrowed_match = re.search(r"Lånad på:\s*([^\n]+)", cell_text)
 
             author = author_match.group(1).strip() if author_match else ""
@@ -795,13 +764,11 @@ class HelgebibliotekenApiClient:
             media_type = media_match.group(1).strip() if media_match else ""
             borrowed_info = borrowed_match.group(1).strip() if borrowed_match else ""
 
-            # Parse borrowed date from borrowed_info (format: "Library YYYY-MM-DD")
             borrowed_date = None
             borrowed_library = borrowed_info
             date_match = re.search(r"(\d{4}-\d{2}-\d{2})", borrowed_info)
             if date_match:
                 date_str = date_match.group(1)
-                # Validate it's a valid date format
                 try:
                     datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=UTC)
                     borrowed_date = date_str
@@ -809,34 +776,25 @@ class HelgebibliotekenApiClient:
                     borrowed_date = None
                 borrowed_library = borrowed_info.replace(date_str, "").strip()
 
-            # Find due date cell (contains date pattern YYYY-MM-DD)
             due_date = None
             status_text = ""
             for cell in cells:
-                cell_text = cell.get_text(strip=True)
-                # Check if it's a date cell (just a date, no other text)
-                if re.match(r"^\d{4}-\d{2}-\d{2}$", cell_text):
-                    # Validate it's a valid date format
+                inner_text = cell.get_text(strip=True)
+                if re.match(r"^\d{4}-\d{2}-\d{2}$", inner_text):
                     try:
-                        datetime.strptime(cell_text, "%Y-%m-%d").replace(tzinfo=UTC)
-                        due_date = cell_text
+                        datetime.strptime(inner_text, "%Y-%m-%d").replace(tzinfo=UTC)
+                        due_date = inner_text
                     except ValueError:
                         due_date = None
-                # Check if it's status cell (contains "Låna om" or renewal info)
-                elif "låna om" in cell_text.lower() or "omlån" in cell_text.lower():
-                    status_text = cell_text
+                elif "låna om" in inner_text.lower() or "omlån" in inner_text.lower():
+                    status_text = inner_text
 
-            # If we didn't find status, check last cell
             if not status_text and len(cells) > 1:
-                status_cell = cells[-1]
-                status_text = status_cell.get_text(strip=True)
+                status_text = cells[-1].get_text(strip=True)
 
             can_renew = (
                 "kan inte lånas om" not in status_text.lower() if status_text else True
             )
-
-            # Extract renewal count from status text
-            # (e.g., "Återstående antal omlån: 3")
             renewal_count = None
             if status_text:
                 renewal_match = re.search(
@@ -850,23 +808,270 @@ class HelgebibliotekenApiClient:
                     except (ValueError, IndexError):
                         renewal_count = None
 
-            loan = {
-                "title": title,
-                "author": author,
-                "publication_year": year,
-                "media_type": media_type,
-                "borrowed_from": borrowed_library,
-                "borrowed_date": borrowed_date,
-                "due_date": due_date,
-                "status": status_text,
-                "can_renew": can_renew,
-                "renewal_count": renewal_count,
-            }
-            _LOGGER.debug("Parsed loan: %s by %s (due: %s)", title, author, due_date)
-            loans.append(loan)
+            checkbox = row.find("input", {"name": "loansCheckboxGroup"})
+            checkbox_value = checkbox.get("value") if checkbox else None
 
+            # Per-row "Låna om" is a GET to a Wicket ILinkListener link embedded
+            # in the submit button's onclick (window.location.href='...').
+            renew_url = None
+            for submit in row.find_all("input", {"type": "submit"}):
+                onclick = submit.get("onclick", "")
+                href_match = re.search(
+                    r"window\.location\.href\s*=\s*'([^']+renewLoan[^']*)'", onclick
+                )
+                if href_match:
+                    renew_url = href_match.group(1)
+                    break
+
+            rows_data.append(
+                {
+                    "loan_id": loan_id,
+                    "title": title,
+                    "author": author,
+                    "publication_year": year,
+                    "media_type": media_type,
+                    "borrowed_from": borrowed_library,
+                    "borrowed_date": borrowed_date,
+                    "due_date": due_date,
+                    "status": status_text,
+                    "can_renew": can_renew,
+                    "renewal_count": renewal_count,
+                    "checkbox_value": checkbox_value,
+                    "renew_url": renew_url,
+                }
+            )
+        return rows_data
+
+    def _extract_feedback_messages(self, soup: BeautifulSoup) -> list[str]:
+        """Extract feedback messages from common alert/message containers."""
+        messages: list[str] = []
+        for selector in ("div.feedbackPanel", "div.alert", "li.feedbackPanelERROR"):
+            for node in soup.select(selector):
+                text = node.get_text(" ", strip=True)
+                if text and text not in messages:
+                    messages.append(text)
+        return messages
+
+    def _parse_loans(self, loans_portlet: Any) -> list[dict[str, Any]]:
+        """Parse loan information from the portlet."""
+        portlet_text = loans_portlet.get_text()
+        if "du har inte loggat in" in portlet_text.lower():
+            _LOGGER.warning("Portlet contains 'not logged in' message")
+            return []
+
+        parsed_rows = self._parse_loan_rows(loans_portlet)
+        loans = []
+        for row in parsed_rows:
+            loan = {
+                "loan_id": row["loan_id"],
+                "title": row["title"],
+                "author": row["author"],
+                "publication_year": row["publication_year"],
+                "media_type": row["media_type"],
+                "borrowed_from": row["borrowed_from"],
+                "borrowed_date": row["borrowed_date"],
+                "due_date": row["due_date"],
+                "status": row["status"],
+                "can_renew": row["can_renew"],
+                "renewal_count": row["renewal_count"],
+            }
+            _LOGGER.debug(
+                "Parsed loan: %s by %s (due: %s)",
+                loan["title"],
+                loan["author"],
+                loan["due_date"],
+            )
+            loans.append(loan)
         _LOGGER.debug("Total loans parsed: %d", len(loans))
         return loans
+
+    async def _fetch_overview_rows(self) -> list[dict[str, Any]]:
+        """Fetch the overview page and return parsed loan rows."""
+        current_url = f"{self.BASE_URL}/protected/my-account/overview"
+        async with asyncio.timeout(TIMEOUT):
+            async with self._session.get(current_url) as response:
+                _verify_response_or_raise(response)
+                html = await response.text()
+        soup = BeautifulSoup(html, "html.parser")
+        if "du har inte loggat in" in html.lower():
+            self._logged_in = False
+            _raise_session_expired()
+        loans_portlet = self._find_loans_portlet(soup)
+        if not loans_portlet:
+            msg = "Could not find loans portlet"
+            raise HelgebibliotekenApiClientError(msg)
+        return self._parse_loan_rows(loans_portlet)
+
+    async def _renew_single(self, loan_id: str) -> tuple[bool, list[str]]:
+        """Renew one loan via its per-row Wicket link; verify with a fresh fetch."""
+        current_url = f"{self.BASE_URL}/protected/my-account/overview"
+        rows = await self._fetch_overview_rows()
+        matches = [r for r in rows if r.get("loan_id") == loan_id]
+        if len(matches) != 1:
+            return False, []
+        row = matches[0]
+        if not row.get("renew_url") or not row.get("can_renew"):
+            return False, []
+
+        before_due = row.get("due_date")
+        before_count = row.get("renewal_count")
+        renew_url = urljoin(current_url, row["renew_url"])
+
+        async with asyncio.timeout(TIMEOUT):
+            async with self._session.get(renew_url, allow_redirects=True) as response:
+                _verify_response_or_raise(response)
+                renew_html = await response.text()
+        feedback = self._extract_feedback_messages(
+            BeautifulSoup(renew_html, "html.parser")
+        )
+
+        after_rows = await self._fetch_overview_rows()
+        after = next((r for r in after_rows if r.get("loan_id") == loan_id), None)
+        if not after:
+            return False, feedback
+
+        due_advanced = False
+        after_due = after.get("due_date")
+        if before_due and after_due:
+            try:
+                due_advanced = date.fromisoformat(after_due) > date.fromisoformat(
+                    before_due
+                )
+            except ValueError:
+                due_advanced = False
+        after_count = after.get("renewal_count")
+        count_decreased = (
+            before_count is not None
+            and after_count is not None
+            and after_count < before_count
+        )
+        return (due_advanced or count_decreased), feedback
+
+    def _classify_requested(
+        self,
+        requested_ids: list[str],
+        rows: list[dict[str, Any]],
+        result: dict[str, list[str]],
+    ) -> list[str]:
+        """Sort requested IDs into buckets; return the renewable ones."""
+        row_map: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for row in rows:
+            if row.get("loan_id"):
+                row_map[row["loan_id"]].append(row)
+
+        selectable_ids: list[str] = []
+        for loan_id in requested_ids:
+            matches = row_map.get(loan_id, [])
+            if not matches:
+                result["not_found"].append(loan_id)
+            elif len(matches) > 1:
+                result["ambiguous"].append(loan_id)
+            elif not matches[0].get("can_renew") or not matches[0].get("renew_url"):
+                result["skipped"].append(loan_id)
+            else:
+                selectable_ids.append(loan_id)
+        return selectable_ids
+
+    async def async_renew_loans(  # noqa: PLR0912
+        self, loan_ids: list[str]
+    ) -> dict[str, Any]:
+        """Renew selected loans by loan ID(s), one Wicket renewal link per loan."""
+        requested_ids: list[str] = []
+        for loan_id in loan_ids:
+            normalized = str(loan_id).strip()
+            if normalized and normalized not in requested_ids:
+                requested_ids.append(normalized)
+        if not requested_ids:
+            msg = "No valid loan IDs provided"
+            raise HelgebibliotekenApiClientError(msg)
+
+        for attempt in range(2):
+            await self.async_login()
+            try:
+                rows = await self._fetch_overview_rows()
+                result: dict[str, list[str]] = {
+                    "renewed": [],
+                    "failed": [],
+                    "skipped": [],
+                    "not_found": [],
+                    "ambiguous": [],
+                    "feedback": [],
+                }
+                selectable_ids = self._classify_requested(requested_ids, rows, result)
+                for loan_id in selectable_ids:
+                    renewed, feedback = await self._renew_single(loan_id)
+                    for message in feedback:
+                        if message not in result["feedback"]:
+                            result["feedback"].append(message)
+                    bucket = "renewed" if renewed else "failed"
+                    result[bucket].append(loan_id)
+            except HelgebibliotekenApiClientAuthenticationError:
+                if attempt == 0:
+                    _LOGGER.warning(
+                        "Session expired during renewal, re-logging in, retrying"
+                    )
+                    self._logged_in = False
+                    continue
+                raise
+            except TimeoutError as exception:
+                msg = f"Timeout error renewing loans - {exception}"
+                raise HelgebibliotekenApiClientCommunicationError(msg) from exception
+            except (aiohttp.ClientError, socket.gaierror) as exception:
+                msg = f"Error renewing loans - {exception}"
+                raise HelgebibliotekenApiClientCommunicationError(msg) from exception
+            except HelgebibliotekenApiClientError:
+                raise
+            except Exception as exception:  # pylint: disable=broad-except
+                msg = f"Unexpected error renewing loans - {exception}"
+                raise HelgebibliotekenApiClientError(msg) from exception
+            else:
+                return result
+
+        msg = "Loan renewal failed after retry"
+        raise HelgebibliotekenApiClientError(msg)
+
+    async def async_renew_loan(self, loan_id: str) -> dict[str, Any]:
+        """Renew one loan and raise a clear error if it failed."""
+        result = await self.async_renew_loans([loan_id])
+        if result["renewed"]:
+            return result
+        if result["ambiguous"]:
+            msg = f"Loan ID {loan_id} is ambiguous, multiple matching loans found"
+        elif result["not_found"]:
+            msg = f"Loan ID {loan_id} not found"
+        elif result["skipped"]:
+            msg = f"Loan ID {loan_id} cannot be renewed"
+        else:
+            msg = f"Renewal failed for loan ID {loan_id}"
+        raise HelgebibliotekenApiClientError(msg)
+
+    async def async_renew_due_soon(self, days: int = 3) -> dict[str, Any]:
+        """Renew all renewable loans overdue or due within N days."""
+        loans = await self.async_get_loans()
+        today = datetime.now(UTC).date()
+        due_soon_ids: list[str] = []
+        for loan in loans:
+            loan_id = loan.get("loan_id")
+            due_date = loan.get("due_date")
+            if not loan_id or not due_date or loan.get("can_renew") is False:
+                continue
+            try:
+                due = date.fromisoformat(due_date)
+            except (TypeError, ValueError):
+                continue
+            if (due - today).days <= days and str(loan_id) not in due_soon_ids:
+                due_soon_ids.append(str(loan_id))
+
+        if not due_soon_ids:
+            return {
+                "renewed": [],
+                "failed": [],
+                "skipped": [],
+                "not_found": [],
+                "ambiguous": [],
+                "feedback": [],
+            }
+        return await self.async_renew_loans(due_soon_ids)
 
     async def async_get_data(self) -> dict[str, Any]:
         """Get data from the API - returns loans information."""

@@ -7,3 +7,54 @@ refresh:
       description: Optional entry ID to refresh a specific integration instance. If not provided, all instances will be refreshed.
       selector:
         text:
+
+renew_loan:
+  name: Renew Loan
+  description: Renew one loan by loan ID.
+  fields:
+    loan_id:
+      name: Loan ID
+      description: Loan ID shown in the loan list attributes.
+      required: true
+      selector:
+        text:
+    entity_id:
+      name: Entity
+      description: Optional Helgebiblioteken sensor used to resolve the integration instance.
+      selector:
+        entity:
+          filter:
+            - integration: helgebiblioteken
+              domain: sensor
+    entry_id:
+      name: Entry ID
+      description: Optional entry ID to target a specific integration instance.
+      selector:
+        text:
+
+renew_due_soon:
+  name: Renew Due Soon
+  description: Renew renewable loans that are overdue or due within the selected number of days.
+  fields:
+    days:
+      name: Days
+      description: Renew loans overdue or due within this many days.
+      default: 3
+      selector:
+        number:
+          min: 0
+          max: 30
+          step: 1
+    entity_id:
+      name: Entity
+      description: Optional Helgebiblioteken sensor used to resolve the integration instance.
+      selector:
+        entity:
+          filter:
+            - integration: helgebiblioteken
+              domain: sensor
+    entry_id:
+      name: Entry ID
+      description: Optional entry ID to target a specific integration instance.
+      selector:
+        text:

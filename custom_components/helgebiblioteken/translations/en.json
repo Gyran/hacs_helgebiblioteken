@@ -25,6 +25,42 @@
         "refresh": {
             "name": "Refresh",
             "description": "Force a refresh of loan data from HelGe-biblioteken."
+        },
+        "renew_loan": {
+            "name": "Renew Loan",
+            "description": "Renew one loan by loan ID.",
+            "fields": {
+                "loan_id": {
+                    "name": "Loan ID",
+                    "description": "Loan ID shown in the loan list attributes."
+                },
+                "entity_id": {
+                    "name": "Entity",
+                    "description": "Optional Helgebiblioteken sensor used to resolve the integration instance."
+                },
+                "entry_id": {
+                    "name": "Entry ID",
+                    "description": "Optional entry ID to target a specific integration instance."
+                }
+            }
+        },
+        "renew_due_soon": {
+            "name": "Renew Due Soon",
+            "description": "Renew renewable loans that are overdue or due within the selected number of days.",
+            "fields": {
+                "days": {
+                    "name": "Days",
+                    "description": "Renew loans overdue or due within this many days."
+                },
+                "entity_id": {
+                    "name": "Entity",
+                    "description": "Optional Helgebiblioteken sensor used to resolve the integration instance."
+                },
+                "entry_id": {
+                    "name": "Entry ID",
+                    "description": "Optional entry ID to target a specific integration instance."
+                }
+            }
         }
     }
 }

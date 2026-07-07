@@ -2,6 +2,9 @@
 
 target-version = "py313"
 
+# Dev helpers (optional Pillow); keep lint focused on the integration package.
+extend-exclude = ["scripts"]
+
 [lint]
 select = [
     "ALL",
