@@ -25,4 +25,9 @@ JSMODULES: Final[list[dict[str, str]]] = [
         "filename": "helgebiblioteken-loans-card.js",
         "version": INTEGRATION_VERSION,
     },
+    {
+        "name": "Helgebiblioteken Reservations Card",
+        "filename": "helgebiblioteken-reservations-card.js",
+        "version": INTEGRATION_VERSION,
+    },
 ]

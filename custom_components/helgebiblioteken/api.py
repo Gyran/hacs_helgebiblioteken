@@ -20,6 +20,7 @@ MIN_TABLE_CELLS = 3
 MIN_LOGIN_INPUTS = 2
 MAX_DEBUG_VALUE_LEN = 50
 MAX_LOAN_PAGES = 20  # Safety limit when following pagination
+MAX_RESERVATION_PAGES = 20  # Safety limit when following pagination
 
 _LOGGER = getLogger(__name__)
 
@@ -632,6 +633,113 @@ class HelgebibliotekenApiClient:
         msg = "Loan fetch failed after retry"
         raise HelgebibliotekenApiClientError(msg)
 
+    async def async_get_reservations(  # noqa: PLR0912, PLR0915
+        self,
+    ) -> list[dict[str, Any]]:
+        """Get current reservations from HelGe-biblioteken, following pagination."""
+        _LOGGER.debug("Fetching reservations")
+        for attempt in range(2):
+            await self.async_login()
+            try:
+                async with asyncio.timeout(TIMEOUT):
+                    all_reservations: list[dict[str, Any]] = []
+                    current_url = f"{self.BASE_URL}/protected/my-account/overview"
+                    page_num = 1
+
+                    while page_num <= MAX_RESERVATION_PAGES:
+                        _LOGGER.debug(
+                            "Fetching reservations page %d from %s",
+                            page_num,
+                            current_url,
+                        )
+
+                        async with self._session.get(current_url) as response:
+                            _LOGGER.debug("Page response status: %s", response.status)
+                            _verify_response_or_raise(response)
+                            html = await response.text()
+                            _LOGGER.debug("Page HTML length: %d bytes", len(html))
+                            soup = BeautifulSoup(html, "html.parser")
+
+                        html_lower = html.lower()
+                        not_logged_in = (
+                            "du har inte loggat in" in html_lower
+                            or "not logged in" in html_lower
+                        )
+                        if not_logged_in:
+                            _LOGGER.warning("Session expired - not logged in on page")
+                            self._logged_in = False
+                            _raise_session_expired()
+
+                        reservations_portlet = self._find_reservations_portlet(soup)
+                        if not reservations_portlet:
+                            if page_num == 1:
+                                _LOGGER.warning(
+                                    "Reservations portlet not found in HTML"
+                                )
+                            break
+
+                        portlet_text = reservations_portlet.get_text().lower()
+                        if "du har inte loggat in" in portlet_text:
+                            _LOGGER.warning("Not logged in message found in portlet")
+                            self._logged_in = False
+                            _raise_session_expired()
+
+                        if page_num == 1:
+                            no_reservations_msg = reservations_portlet.find(
+                                string=re.compile(
+                                    r"reservationer saknas|inga reservationer",
+                                    re.IGNORECASE,
+                                )
+                            )
+                            if no_reservations_msg:
+                                _LOGGER.debug("No reservations message found")
+                                return []
+
+                        page_reservations = self._parse_reservations(
+                            reservations_portlet
+                        )
+                        _LOGGER.debug(
+                            "Parsed %d reservations on page %d",
+                            len(page_reservations),
+                            page_num,
+                        )
+                        all_reservations.extend(page_reservations)
+
+                        next_url = self._find_next_page_link(
+                            reservations_portlet, current_url
+                        )
+                        if not next_url or next_url == current_url:
+                            break
+                        current_url = next_url
+                        page_num += 1
+
+                    _LOGGER.debug(
+                        "Total reservations after pagination: %d",
+                        len(all_reservations),
+                    )
+                    return all_reservations
+            except HelgebibliotekenApiClientAuthenticationError:
+                if attempt == 0:
+                    _LOGGER.warning(
+                        "Session expired during reservation fetch, re-logging in "
+                        "and retrying once"
+                    )
+                    self._logged_in = False
+                    continue
+                raise
+            except TimeoutError as exception:
+                msg = f"Timeout error fetching reservations - {exception}"
+                raise HelgebibliotekenApiClientCommunicationError(msg) from exception
+            except (aiohttp.ClientError, socket.gaierror) as exception:
+                msg = f"Error fetching reservations - {exception}"
+                raise HelgebibliotekenApiClientCommunicationError(msg) from exception
+            except Exception as exception:  # pylint: disable=broad-except
+                msg = f"Unexpected error fetching reservations - {exception}"
+                raise HelgebibliotekenApiClientError(msg) from exception
+
+        msg = "Reservation fetch failed after retry"
+        raise HelgebibliotekenApiClientError(msg)
+
     def _find_loans_portlet(self, soup: BeautifulSoup) -> Any:
         """Find the loans portlet in the HTML."""
         # Try multiple strategies to find the loans portlet
@@ -672,6 +780,51 @@ class HelgebibliotekenApiClient:
             return loans_portlet
 
         _LOGGER.debug("Could not find loans portlet with any strategy")
+        return None
+
+    def _find_reservations_portlet(self, soup: BeautifulSoup) -> Any:
+        """Find the reservations portlet in the HTML."""
+        reservations_portlet = soup.find(
+            "div", {"id": re.compile(r"reservationsWicket.*", re.IGNORECASE)}
+        )
+        if reservations_portlet:
+            portlet_id = reservations_portlet.get("id")
+            _LOGGER.debug("Found reservations portlet by ID pattern: %s", portlet_id)
+            return reservations_portlet
+
+        reservations_portlet = soup.find(
+            "div", class_=re.compile(r".*reservation.*", re.IGNORECASE)
+        )
+        if reservations_portlet:
+            _LOGGER.debug("Found reservations portlet by class pattern")
+            return reservations_portlet
+
+        heading = soup.find(
+            "h2", string=re.compile(r"mina reservationer", re.IGNORECASE)
+        )
+        if heading:
+            _LOGGER.debug(
+                "Found 'Mina reservationer' heading, looking for parent portlet"
+            )
+            parent = heading.find_parent(
+                "div", class_=re.compile(r"portlet", re.IGNORECASE)
+            )
+            if parent:
+                _LOGGER.debug("Found reservations portlet via heading parent")
+                return parent
+
+        reservations_portlet = soup.find(
+            "div", {"id": re.compile(r".*reserv.*", re.IGNORECASE)}
+        )
+        if reservations_portlet:
+            portlet_id = reservations_portlet.get("id")
+            _LOGGER.debug(
+                "Found reservations portlet by ID containing 'reserv': %s",
+                portlet_id,
+            )
+            return reservations_portlet
+
+        _LOGGER.debug("Could not find reservations portlet with any strategy")
         return None
 
     def _find_next_page_link(self, loans_portlet: Any, current_url: str) -> str | None:
@@ -883,6 +1036,113 @@ class HelgebibliotekenApiClient:
         _LOGGER.debug("Total loans parsed: %d", len(loans))
         return loans
 
+    def _parse_date_field(self, value: str) -> str | None:
+        """Return ISO date string if valid, else None."""
+        if not value:
+            return None
+        try:
+            datetime.strptime(value.strip(), "%Y-%m-%d").replace(tzinfo=UTC)
+        except ValueError:
+            return None
+        return value.strip()
+
+    def _extract_labeled_values(self, container: Any) -> dict[str, str]:
+        """Extract key/value pairs from arena-field/arena-value spans."""
+        values: dict[str, str] = {}
+        for field in container.find_all("span", class_="arena-field"):
+            label = field.get_text(strip=True).rstrip(":")
+            if not label:
+                continue
+            parent = field.parent
+            if not parent:
+                continue
+            value_node = parent.find("span", class_="arena-value")
+            if not value_node:
+                continue
+            value = value_node.get_text(" ", strip=True)
+            if value:
+                values[label] = value
+        return values
+
+    def _parse_queue_values(self, queue_text: str) -> tuple[int | None, int | None]:
+        """Parse queue text like '1 (av 2 exemplar)' into numeric values."""
+        if not queue_text:
+            return None, None
+        match = re.search(r"(\d+)\s*\(av\s*(\d+)", queue_text, re.IGNORECASE)
+        if not match:
+            return None, None
+        try:
+            return int(match.group(1)), int(match.group(2))
+        except (ValueError, IndexError):
+            return None, None
+
+    def _parse_reservation_containers(
+        self, reservations_portlet: Any
+    ) -> list[dict[str, Any]]:
+        """Parse reservation details from arena record containers."""
+        parsed_reservations: list[dict[str, Any]] = []
+        containers = reservations_portlet.find_all(
+            "div", class_=re.compile(r"\barena-record-container\b")
+        )
+        for container in containers:
+            values = self._extract_labeled_values(container)
+
+            id_node = container.find("span", class_=re.compile(r"\barena-record-id\b"))
+            reservation_id = id_node.get_text(strip=True) if id_node else None
+            if not reservation_id:
+                reservation_id = None
+
+            title_node = container.find(
+                "div", class_=re.compile(r"\barena-record-title\b")
+            )
+            title = title_node.get_text(" ", strip=True) if title_node else ""
+
+            publication_year = None
+            year_text = values.get("Utgivningsår", "")
+            if year_text:
+                try:
+                    publication_year = int(year_text)
+                except ValueError:
+                    publication_year = None
+
+            queue_text = values.get("Köplats", "")
+            queue_position, queue_total = self._parse_queue_values(queue_text)
+
+            reservation = {
+                "reservation_id": reservation_id,
+                "title": title,
+                "author": values.get("Av", ""),
+                "publication_year": publication_year,
+                "language": values.get("Språk", ""),
+                "media_type": values.get("Medietyp", ""),
+                "pickup_branch": values.get("Hämtställe", ""),
+                "queue_text": queue_text,
+                "queue_position": queue_position,
+                "queue_total": queue_total,
+                "reservation_type": values.get("Reservationstyp", ""),
+                "valid_from": self._parse_date_field(values.get("Giltig från", "")),
+                "valid_to": self._parse_date_field(values.get("Giltig till", "")),
+                "pickup_number": values.get("Löpnummer", ""),
+                "pickup_expiry_date": self._parse_date_field(
+                    values.get("Hämtas senast", "")
+                ),
+                "status": values.get("Status", ""),
+            }
+            parsed_reservations.append(reservation)
+
+        return parsed_reservations
+
+    def _parse_reservations(self, reservations_portlet: Any) -> list[dict[str, Any]]:
+        """Parse reservations from the reservations portlet."""
+        portlet_text = reservations_portlet.get_text()
+        if "du har inte loggat in" in portlet_text.lower():
+            _LOGGER.warning("Reservations portlet contains 'not logged in' message")
+            return []
+
+        reservations = self._parse_reservation_containers(reservations_portlet)
+        _LOGGER.debug("Total reservations parsed: %d", len(reservations))
+        return reservations
+
     async def _fetch_overview_rows(self) -> list[dict[str, Any]]:
         """Fetch the overview page and return parsed loan rows."""
         current_url = f"{self.BASE_URL}/protected/my-account/overview"
@@ -1075,9 +1335,16 @@ class HelgebibliotekenApiClient:
         """Get data from the API - returns loans information."""
         _LOGGER.debug("Getting data from API")
         loans = await self.async_get_loans()
+        reservations = await self.async_get_reservations()
         data = {
             "loans": loans,
             "loan_count": len(loans),
+            "reservations": reservations,
+            "reservation_count": len(reservations),
         }
-        _LOGGER.debug("Returning data with %d loans", len(loans))
+        _LOGGER.debug(
+            "Returning data with %d loans and %d reservations",
+            len(loans),
+            len(reservations),
+        )
         return data

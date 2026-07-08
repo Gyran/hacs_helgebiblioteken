@@ -28,6 +28,13 @@ LOAN_COUNT_DESCRIPTION = SensorEntityDescription(
     native_unit_of_measurement="loans",
 )
 
+RESERVATION_COUNT_DESCRIPTION = SensorEntityDescription(
+    key="helgebiblioteken_reservation_count",
+    name="Reservation Count",
+    icon="mdi:bookmark-multiple",
+    native_unit_of_measurement="reservations",
+)
+
 NEXT_EXPIRY_DESCRIPTION = SensorEntityDescription(
     key="helgebiblioteken_next_loan_expiry",
     name="Next Loan Expiry",
@@ -55,6 +62,10 @@ async def async_setup_entry(
             LoanCountSensor(
                 coordinator=coordinator,
                 entity_description=LOAN_COUNT_DESCRIPTION,
+            ),
+            ReservationCountSensor(
+                coordinator=coordinator,
+                entity_description=RESERVATION_COUNT_DESCRIPTION,
             ),
             NextLoanExpirySensor(
                 coordinator=coordinator,
@@ -98,6 +109,39 @@ class LoanCountSensor(HelgebibliotekenEntity, SensorEntity):
         loans = self.coordinator.data.get("loans", [])
         return {
             "loans": loans,
+        }
+
+
+class ReservationCountSensor(HelgebibliotekenEntity, SensorEntity):
+    """Sensor for total reservation count with all reservations as attributes."""
+
+    def __init__(
+        self,
+        coordinator: HelgebibliotekenDataUpdateCoordinator,
+        entity_description: SensorEntityDescription,
+    ) -> None:
+        """Initialize the reservation count sensor."""
+        super().__init__(coordinator)
+        self.entity_description = entity_description
+        self._attr_unique_id = (
+            f"{coordinator.config_entry.entry_id}_{entity_description.key}"
+        )
+
+    @property
+    def native_value(self) -> int:
+        """Return the number of reservations."""
+        if not self.coordinator.data:
+            return 0
+        return self.coordinator.data.get("reservation_count", 0)
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        """Return extra state attributes with all reservation details."""
+        if not self.coordinator.data:
+            return {}
+        reservations = self.coordinator.data.get("reservations", [])
+        return {
+            "reservations": reservations,
         }
 
 

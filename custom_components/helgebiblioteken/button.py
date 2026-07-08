@@ -18,7 +18,7 @@ if TYPE_CHECKING:
 
 REFRESH_BUTTON_DESCRIPTION = ButtonEntityDescription(
     key="helgebiblioteken_refresh",
-    name="Refresh Loans",
+    name="Refresh Data",
     icon="mdi:refresh",
     entity_category=EntityCategory.DIAGNOSTIC,
 )

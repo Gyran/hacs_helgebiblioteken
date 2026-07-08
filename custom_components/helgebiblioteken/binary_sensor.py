@@ -38,6 +38,13 @@ DUE_SOON_DESCRIPTION = BinarySensorEntityDescription(
     device_class=BinarySensorDeviceClass.PROBLEM,
 )
 
+RESERVATIONS_READY_DESCRIPTION = BinarySensorEntityDescription(
+    key="helgebiblioteken_reservations_ready_for_pickup",
+    name="Reservations Ready for Pickup",
+    icon="mdi:book-check",
+    device_class=BinarySensorDeviceClass.PROBLEM,
+)
+
 
 async def async_setup_entry(
     hass: HomeAssistant,  # noqa: ARG001 Unused function argument: `hass`
@@ -57,6 +64,10 @@ async def async_setup_entry(
                 coordinator=coordinator,
                 entity_description=DUE_SOON_DESCRIPTION,
             ),
+            ReservationsReadyForPickupBinarySensor(
+                coordinator=coordinator,
+                entity_description=RESERVATIONS_READY_DESCRIPTION,
+            ),
         ],
     )
 
@@ -70,6 +81,20 @@ def _parse_due_date(loan: dict) -> date | None:
         return date.fromisoformat(due_date_str)
     except ValueError, TypeError:
         return None
+
+
+def _reservation_ready_for_pickup(reservation: dict) -> bool:
+    """Return True when reservation appears ready for pickup."""
+    pickup_number = str(reservation.get("pickup_number", "")).strip()
+    if pickup_number:
+        return True
+
+    pickup_expiry_date = reservation.get("pickup_expiry_date")
+    if pickup_expiry_date:
+        return True
+
+    status = str(reservation.get("status", "")).lower()
+    return any(token in status for token in ("hämta", "ready", "available"))
 
 
 class _LoanDueBinarySensor(HelgebibliotekenEntity, BinarySensorEntity):
@@ -149,3 +174,60 @@ class DueSoonLoansBinarySensor(_LoanDueBinarySensor):
             if 0 <= days_left <= DUE_SOON_DAYS:
                 matching.append(loan)
         return matching
+
+
+class ReservationsReadyForPickupBinarySensor(
+    HelgebibliotekenEntity, BinarySensorEntity
+):
+    """On when at least one reservation is ready to be picked up."""
+
+    def __init__(
+        self,
+        coordinator: HelgebibliotekenDataUpdateCoordinator,
+        entity_description: BinarySensorEntityDescription,
+    ) -> None:
+        """Initialize the reservation binary sensor."""
+        super().__init__(coordinator)
+        self.entity_description = entity_description
+        self._attr_unique_id = (
+            f"{coordinator.config_entry.entry_id}_{entity_description.key}"
+        )
+
+    def _matching_reservations(self) -> list[dict]:
+        """Return reservations that are ready for pickup."""
+        reservations = self.coordinator.data.get("reservations", [])
+        return [
+            reservation
+            for reservation in reservations
+            if _reservation_ready_for_pickup(reservation)
+        ]
+
+    @property
+    def is_on(self) -> bool:
+        """Return True if any reservation is ready for pickup."""
+        if not self.coordinator.data:
+            return False
+        return bool(self._matching_reservations())
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        """Return count and details of reservations ready for pickup."""
+        if not self.coordinator.data:
+            return {"count": 0, "reservations": []}
+
+        matching = self._matching_reservations()
+        return {
+            "count": len(matching),
+            "reservations": [
+                {
+                    "reservation_id": reservation.get("reservation_id", ""),
+                    "title": reservation.get("title", ""),
+                    "author": reservation.get("author", ""),
+                    "pickup_branch": reservation.get("pickup_branch", ""),
+                    "pickup_number": reservation.get("pickup_number", ""),
+                    "pickup_expiry_date": reservation.get("pickup_expiry_date", ""),
+                    "status": reservation.get("status", ""),
+                }
+                for reservation in matching
+            ],
+        }

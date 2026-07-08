@@ -43,7 +43,12 @@ A Home Assistant custom integration for HelGe-biblioteken that allows you to tra
 
 ## Lovelace Card
 
-The integration loads the card script automatically. Add a card with **type** `custom:helgebiblioteken-loans-card` and set **entity** to a Helgebiblioteken sensor (for example the loan count sensor). In the UI editor, use **Add card → Manual** and paste YAML, or add the card in YAML mode.
+The integration loads card scripts automatically.
+
+- Loans card: **type** `custom:helgebiblioteken-loans-card`, **entity** `sensor.helgebiblioteken_loan_count`
+- Reservations card: **type** `custom:helgebiblioteken-reservations-card`, **entity** `sensor.helgebiblioteken_reservation_count`
+
+In the UI editor, use **Add card → Manual** and paste YAML, or add cards in YAML mode.
 
 ## Services
 
@@ -59,9 +64,10 @@ Manually refresh loan data for all configured accounts or a specific account.
 The integration creates the following entities:
 
 - `sensor.helgebiblioteken_loan_count` - Number of active loans
+- `sensor.helgebiblioteken_reservation_count` - Number of active reservations
 - `sensor.helgebiblioteken_next_loan_expiry` - Date of the next loan expiry
 - `sensor.helgebiblioteken_last_update` - Last update timestamp (diagnostic)
-- `button.helgebiblioteken_refresh` - Button to manually refresh loan data
+- `button.helgebiblioteken_refresh` - Button to manually refresh data
 
 ## Support
 
