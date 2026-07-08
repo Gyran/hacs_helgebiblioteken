@@ -53,7 +53,25 @@ class HelgebibliotekenReservationsCard extends HTMLElement {
     if (pickupNumber) {
       return true;
     }
-    return Boolean(reservation?.pickup_expiry_date);
+    if (reservation?.pickup_expiry_date) {
+      return true;
+    }
+
+    const status = String(reservation?.status || '').trim().toLowerCase();
+    if (!status || ['aktiv', 'active', 'väntar', 'waiting'].includes(status)) {
+      return false;
+    }
+
+    const readyTokens = [
+      'klar att hämta',
+      'redo att hämta',
+      'kan hämtas',
+      'hämtklar',
+      'at pick-up',
+      'ready for pickup',
+      'available for pickup',
+    ];
+    return readyTokens.some((token) => status.includes(token));
   }
 
   _renderReservationLine(label, value) {

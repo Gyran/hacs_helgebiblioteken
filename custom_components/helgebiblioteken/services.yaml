@@ -1,6 +1,6 @@
 refresh:
   name: Refresh
-  description: Force a refresh of loan data from HelGe-biblioteken.
+  description: Force a refresh of account data (loans and reservations) from HelGe-biblioteken.
   fields:
     entry_id:
       name: Entry ID

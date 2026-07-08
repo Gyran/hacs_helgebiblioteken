@@ -13,6 +13,7 @@ from homeassistant.components.binary_sensor import (
 from homeassistant.util import dt as dt_util
 
 from .entity import HelgebibliotekenEntity
+from .reservation import is_reservation_ready_for_pickup
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
@@ -81,20 +82,6 @@ def _parse_due_date(loan: dict) -> date | None:
         return date.fromisoformat(due_date_str)
     except ValueError, TypeError:
         return None
-
-
-def _reservation_ready_for_pickup(reservation: dict) -> bool:
-    """Return True when reservation appears ready for pickup."""
-    pickup_number = str(reservation.get("pickup_number", "")).strip()
-    if pickup_number:
-        return True
-
-    pickup_expiry_date = reservation.get("pickup_expiry_date")
-    if pickup_expiry_date:
-        return True
-
-    status = str(reservation.get("status", "")).lower()
-    return any(token in status for token in ("hämta", "ready", "available"))
 
 
 class _LoanDueBinarySensor(HelgebibliotekenEntity, BinarySensorEntity):
@@ -199,7 +186,7 @@ class ReservationsReadyForPickupBinarySensor(
         return [
             reservation
             for reservation in reservations
-            if _reservation_ready_for_pickup(reservation)
+            if is_reservation_ready_for_pickup(reservation)
         ]
 
     @property
