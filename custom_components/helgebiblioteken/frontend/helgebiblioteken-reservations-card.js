@@ -74,6 +74,42 @@ class HelgebibliotekenReservationsCard extends HTMLElement {
     return readyTokens.some((token) => status.includes(token));
   }
 
+  _parseIsoDate(dateStr) {
+    if (!dateStr || typeof dateStr !== 'string') {
+      return null;
+    }
+    const match = dateStr.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!match) {
+      return null;
+    }
+    const [, year, month, day] = match;
+    const parsed = new Date(Number(year), Number(month) - 1, Number(day));
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }
+
+  _sortReservations(reservations) {
+    return [...reservations].sort((a, b) => {
+      const aReady = this._isReadyForPickup(a);
+      const bReady = this._isReadyForPickup(b);
+      if (aReady !== bReady) {
+        return aReady ? -1 : 1;
+      }
+
+      const aCreated = this._parseIsoDate(a?.valid_from);
+      const bCreated = this._parseIsoDate(b?.valid_from);
+      if (aCreated && bCreated) {
+        return aCreated.getTime() - bCreated.getTime();
+      }
+      if (aCreated) {
+        return -1;
+      }
+      if (bCreated) {
+        return 1;
+      }
+      return 0;
+    });
+  }
+
   _renderReservationLine(label, value) {
     if (!value) {
       return '';
@@ -118,7 +154,7 @@ class HelgebibliotekenReservationsCard extends HTMLElement {
       return;
     }
 
-    const reservations = stateObj.attributes.reservations || [];
+    const reservations = this._sortReservations(stateObj.attributes.reservations || []);
     let reservationsHtml = '';
 
     if (reservations.length === 0) {
