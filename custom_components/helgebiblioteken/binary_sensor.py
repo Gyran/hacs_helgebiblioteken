@@ -43,7 +43,6 @@ RESERVATIONS_READY_DESCRIPTION = BinarySensorEntityDescription(
     key="helgebiblioteken_reservations_ready_for_pickup",
     name="Reservations Ready for Pickup",
     icon="mdi:book-check",
-    device_class=BinarySensorDeviceClass.PROBLEM,
 )
 
 
@@ -82,6 +81,29 @@ def _parse_due_date(loan: dict) -> date | None:
         return date.fromisoformat(due_date_str)
     except ValueError, TypeError:
         return None
+
+
+def _parse_pickup_expiry_date(reservation: dict) -> date | None:
+    """Return the pickup expiry date as a date, or None if missing/invalid."""
+    pickup_expiry_str = reservation.get("pickup_expiry_date")
+    if not pickup_expiry_str:
+        return None
+    try:
+        return date.fromisoformat(pickup_expiry_str)
+    except ValueError, TypeError:
+        return None
+
+
+def _earliest_pickup_expiry_date(reservations: list[dict]) -> str | None:
+    """Return the earliest pickup expiry among reservations, if any."""
+    pickup_dates = [
+        pickup_date
+        for reservation in reservations
+        if (pickup_date := _parse_pickup_expiry_date(reservation)) is not None
+    ]
+    if not pickup_dates:
+        return None
+    return min(pickup_dates).isoformat()
 
 
 class _LoanDueBinarySensor(HelgebibliotekenEntity, BinarySensorEntity):
@@ -200,11 +222,16 @@ class ReservationsReadyForPickupBinarySensor(
     def extra_state_attributes(self) -> dict:
         """Return count and details of reservations ready for pickup."""
         if not self.coordinator.data:
-            return {"count": 0, "reservations": []}
+            return {
+                "count": 0,
+                "next_pickup_expiry_date": None,
+                "reservations": [],
+            }
 
         matching = self._matching_reservations()
         return {
             "count": len(matching),
+            "next_pickup_expiry_date": _earliest_pickup_expiry_date(matching),
             "reservations": [
                 {
                     "reservation_id": reservation.get("reservation_id", ""),

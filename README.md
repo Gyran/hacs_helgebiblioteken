@@ -96,7 +96,7 @@ The integration creates the following entities:
 - `sensor.helgebiblioteken_last_update` - Last update timestamp (diagnostic)
 - `binary_sensor.helgebiblioteken_loans_overdue` - On when at least one loan is overdue
 - `binary_sensor.helgebiblioteken_loans_due_soon` - On when at least one loan is due soon
-- `binary_sensor.helgebiblioteken_reservations_ready_for_pickup` - On when at least one reservation is ready for pickup
+- `binary_sensor.helgebiblioteken_reservations_ready_for_pickup` - On when at least one reservation is ready for pickup (`next_pickup_expiry_date` attribute = earliest pickup deadline)
 - `button.helgebiblioteken_refresh` - Button to manually refresh account data
 
 ## Automations
@@ -114,7 +114,16 @@ automation:
       - action: notify.notify
         data:
           title: Bibliotek
-          message: Du har en reservation redo att hämtas.
+          message: >-
+            {% set ready = state_attr('binary_sensor.helgebiblioteken_reservations_ready_for_pickup', 'reservations') %}
+            {% if ready %}
+            {{ ready | length }} reservation(er) att hämta:
+            {% for item in ready %}
+            - {{ item.title }} (löpnummer {{ item.pickup_number }}, hämtas senast {{ item.pickup_expiry_date }})
+            {% endfor %}
+            {% else %}
+            Du har en reservation redo att hämtas.
+            {% endif %}
 ```
 
 Example notification when loans are due soon:

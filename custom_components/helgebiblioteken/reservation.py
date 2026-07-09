@@ -9,6 +9,7 @@ _WAITING_STATUS_TOKENS = frozenset({"aktiv", "active", "väntar", "waiting"})
 
 # Status substrings that indicate a reservation is ready to pick up.
 _READY_STATUS_TOKENS = (
+    "att hämta",
     "klar att hämta",
     "redo att hämta",
     "kan hämtas",

@@ -63,6 +63,7 @@ class HelgebibliotekenReservationsCard extends HTMLElement {
     }
 
     const readyTokens = [
+      'att hämta',
       'klar att hämta',
       'redo att hämta',
       'kan hämtas',
@@ -93,6 +94,20 @@ class HelgebibliotekenReservationsCard extends HTMLElement {
       const bReady = this._isReadyForPickup(b);
       if (aReady !== bReady) {
         return aReady ? -1 : 1;
+      }
+
+      if (aReady) {
+        const aPickupBy = this._parseIsoDate(a?.pickup_expiry_date);
+        const bPickupBy = this._parseIsoDate(b?.pickup_expiry_date);
+        if (aPickupBy && bPickupBy) {
+          return aPickupBy.getTime() - bPickupBy.getTime();
+        }
+        if (aPickupBy) {
+          return -1;
+        }
+        if (bPickupBy) {
+          return 1;
+        }
       }
 
       const aCreated = this._parseIsoDate(a?.valid_from);
@@ -171,6 +186,7 @@ class HelgebibliotekenReservationsCard extends HTMLElement {
           : '';
         const queueText = reservation.queue_text || '';
         const validTo = reservation.valid_to || '';
+        const pickupExpiry = reservation.pickup_expiry_date || '';
         const pickupBranch = reservation.pickup_branch || '';
         const status = reservation.status || '';
         const pickupNumber = reservation.pickup_number || '';
@@ -184,8 +200,8 @@ class HelgebibliotekenReservationsCard extends HTMLElement {
               </div>
               ${author ? `<div class="reservation-author">${this.escapeHtml(author)}</div>` : ''}
               ${this._renderReservationLine('Hämtställe', pickupBranch)}
-              ${this._renderReservationLine('Köplats', queueText)}
-              ${this._renderReservationLine('Giltig till', validTo)}
+              ${readyForPickup ? '' : this._renderReservationLine('Köplats', queueText)}
+              ${readyForPickup ? this._renderReservationLine('Hämtas senast', pickupExpiry) : this._renderReservationLine('Giltig till', validTo)}
               ${this._renderReservationLine('Status', status)}
               ${this._renderReservationLine('Löpnummer', pickupNumber)}
             </div>
