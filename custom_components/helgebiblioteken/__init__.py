@@ -14,7 +14,8 @@ from typing import TYPE_CHECKING
 import aiohttp
 import voluptuous as vol
 from aiohttp.resolver import ThreadedResolver
-from homeassistant.const import CONF_PASSWORD, CONF_USERNAME, Platform
+from homeassistant.const import CONF_PASSWORD, CONF_USERNAME, EVENT_HOMEASSISTANT_STARTED, Platform
+from homeassistant.core import CoreState
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import entity_registry as er
@@ -59,15 +60,24 @@ RENEW_DUE_SOON_SCHEMA = vol.Schema(
 
 async def async_setup(hass: HomeAssistant, _config: dict) -> bool:
     """Set up the Helgebiblioteken integration (frontend only)."""
-    # Register static path + extra_js as soon as HA is starting (not only after
-    # EVENT_HOMEASSISTANT_STARTED), so index.html includes the card module before
-    # the Lovelace card picker loads (otherwise the custom element never appears
-    # in time).
+    frontend = JSModuleRegistration(hass)
 
-    async def _register_frontend(_h: HomeAssistant) -> None:
-        await JSModuleRegistration(_h).async_register()
+    async def _register_frontend_shell(_h: HomeAssistant) -> None:
+        # Load card scripts early so the Lovelace picker can resolve custom elements.
+        await frontend.async_register()
 
-    async_at_start(hass, _register_frontend)
+    async def _register_lovelace_resources(_event=None) -> None:
+        await frontend.async_register_lovelace_resources()
+
+    async_at_start(hass, _register_frontend_shell)
+
+    if hass.state == CoreState.running:
+        await _register_lovelace_resources()
+    else:
+        hass.bus.async_listen_once(
+            EVENT_HOMEASSISTANT_STARTED, _register_lovelace_resources
+        )
+
     return True
 
 
