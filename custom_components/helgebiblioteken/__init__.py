@@ -14,7 +14,12 @@ from typing import TYPE_CHECKING
 import aiohttp
 import voluptuous as vol
 from aiohttp.resolver import ThreadedResolver
-from homeassistant.const import CONF_PASSWORD, CONF_USERNAME, EVENT_HOMEASSISTANT_STARTED, Platform
+from homeassistant.const import (
+    CONF_PASSWORD,
+    CONF_USERNAME,
+    EVENT_HOMEASSISTANT_STARTED,
+    Platform,
+)
 from homeassistant.core import CoreState
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
@@ -29,7 +34,7 @@ from .data import HelgebibliotekenData
 from .frontend import JSModuleRegistration
 
 if TYPE_CHECKING:
-    from homeassistant.core import HomeAssistant, ServiceCall
+    from homeassistant.core import Event, HomeAssistant, ServiceCall
 
     from .data import HelgebibliotekenConfigEntry
 
@@ -66,7 +71,7 @@ async def async_setup(hass: HomeAssistant, _config: dict) -> bool:
         # Load card scripts early so the Lovelace picker can resolve custom elements.
         await frontend.async_register()
 
-    async def _register_lovelace_resources(_event=None) -> None:
+    async def _register_lovelace_resources(_event: Event | None = None) -> None:
         await frontend.async_register_lovelace_resources()
 
     async_at_start(hass, _register_frontend_shell)
