@@ -4,11 +4,10 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from homeassistant.components.frontend import add_extra_js_url
 from homeassistant.components.http import StaticPathConfig
-from homeassistant.helpers.event import async_call_later
 
 from ..const import JSMODULES, URL_BASE  # noqa: TID252
 
@@ -24,80 +23,49 @@ class JSModuleRegistration:
     def __init__(self, hass: HomeAssistant) -> None:
         """Initialize the registrar."""
         self.hass = hass
-        self.lovelace = hass.data.get("lovelace")
-        self._path_registered = False
-        self._extra_js_registered = False
-        self._lovelace_resources_registered = False
+        self._registered = False
 
     async def async_register(self) -> None:
-        """Register static path and inject card JS into the frontend shell."""
+        """Register static path, shell JS, and Lovelace resources."""
+        if self._registered:
+            return
+
         await self._async_register_path()
         self._register_extra_js()
-
-    async def async_register_lovelace_resources(self) -> None:
-        """Register all card modules as Lovelace resources in storage mode."""
-        if self._lovelace_resources_registered:
-            return
-
-        self.lovelace = self.hass.data.get("lovelace")
-        if not self.lovelace or self.lovelace.mode != "storage":
-            return
-
-        await self._async_wait_for_lovelace_resources()
+        await self._async_register_lovelace_resources()
+        self._registered = True
 
     async def _async_register_path(self) -> None:
         """Register the static HTTP path so card JS files are served."""
-        if self._path_registered:
-            return
-
         frontend_dir = Path(__file__).parent
         try:
             await self.hass.http.async_register_static_paths(
                 [StaticPathConfig(URL_BASE, str(frontend_dir), cache_headers=True)]
             )
-            self._path_registered = True
             _LOGGER.debug("Registered static path: %s -> %s", URL_BASE, frontend_dir)
         except RuntimeError:
-            self._path_registered = True
             _LOGGER.debug("Static path already registered: %s", URL_BASE)
 
     def _register_extra_js(self) -> None:
         """Load card scripts with the shell so Lovelace resolves elements in time."""
-        if self._extra_js_registered:
-            return
-
         for module in JSMODULES:
             url = f"{URL_BASE}/{module['filename']}?v={module['version']}"
             add_extra_js_url(self.hass, url)
             _LOGGER.debug("Registered extra JS module URL: %s", url)
 
-        self._extra_js_registered = True
-
-    async def _async_wait_for_lovelace_resources(self) -> None:
-        """Wait until Lovelace resources are loaded, then register all modules."""
-
-        async def _check_loaded(_now: Any) -> None:
-            if not self.lovelace or self.lovelace.mode != "storage":
-                return
-
-            if not self.lovelace.resources.loaded:
-                _LOGGER.debug("Lovelace resources not loaded, retrying in 5s")
-                async_call_later(self.hass, 5, _check_loaded)
-                return
-
-            await self._async_register_modules()
-            self._lovelace_resources_registered = True
-
-        await _check_loaded(None)
-
-    async def _async_register_modules(self) -> None:
-        """Register or update every card module as a Lovelace resource."""
-        if not self.lovelace:
+    async def _async_register_lovelace_resources(self) -> None:
+        """Register all card modules as Lovelace resources in storage mode."""
+        lovelace = self.hass.data.get("lovelace")
+        if not lovelace or lovelace.mode != "storage":
             return
+
+        resources = lovelace.resources
+        if hasattr(resources, "async_get_info"):
+            await resources.async_get_info()
 
         existing_resources = [
             resource
-            for resource in self.lovelace.resources.async_items()
+            for resource in resources.async_items()
             if resource["url"].startswith(URL_BASE)
         ]
 
@@ -116,7 +84,7 @@ class JSModuleRegistration:
                         module["name"],
                         module["version"],
                     )
-                    await self.lovelace.resources.async_update_item(
+                    await resources.async_update_item(
                         resource["id"],
                         {
                             "res_type": "module",
@@ -133,7 +101,7 @@ class JSModuleRegistration:
                 module["name"],
                 module["version"],
             )
-            await self.lovelace.resources.async_create_item(
+            await resources.async_create_item(
                 {
                     "res_type": "module",
                     "url": f"{url}?v={module['version']}",

@@ -17,14 +17,11 @@ from aiohttp.resolver import ThreadedResolver
 from homeassistant.const import (
     CONF_PASSWORD,
     CONF_USERNAME,
-    EVENT_HOMEASSISTANT_STARTED,
     Platform,
 )
-from homeassistant.core import CoreState
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import entity_registry as er
-from homeassistant.helpers.start import async_at_start
 from homeassistant.loader import async_get_loaded_integration
 
 from .api import HelgebibliotekenApiClient, HelgebibliotekenApiClientError
@@ -34,7 +31,7 @@ from .data import HelgebibliotekenData
 from .frontend import JSModuleRegistration
 
 if TYPE_CHECKING:
-    from homeassistant.core import Event, HomeAssistant, ServiceCall
+    from homeassistant.core import HomeAssistant, ServiceCall
 
     from .data import HelgebibliotekenConfigEntry
 
@@ -65,24 +62,7 @@ RENEW_DUE_SOON_SCHEMA = vol.Schema(
 
 async def async_setup(hass: HomeAssistant, _config: dict) -> bool:
     """Set up the Helgebiblioteken integration (frontend only)."""
-    frontend = JSModuleRegistration(hass)
-
-    async def _register_frontend_shell(_h: HomeAssistant) -> None:
-        # Load card scripts early so the Lovelace picker can resolve custom elements.
-        await frontend.async_register()
-
-    async def _register_lovelace_resources(_event: Event | None = None) -> None:
-        await frontend.async_register_lovelace_resources()
-
-    async_at_start(hass, _register_frontend_shell)
-
-    if hass.state == CoreState.running:
-        await _register_lovelace_resources()
-    else:
-        hass.bus.async_listen_once(
-            EVENT_HOMEASSISTANT_STARTED, _register_lovelace_resources
-        )
-
+    await JSModuleRegistration(hass).async_register()
     return True
 
 
