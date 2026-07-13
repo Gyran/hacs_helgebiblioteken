@@ -11,10 +11,11 @@
     "lovelace"
   ],
   "documentation": "https://github.com/gyran/hacs_helgebiblioteken",
+  "homeassistant": "2026.7.2",
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/gyran/hacs_helgebiblioteken/issues",
   "requirements": [
     "beautifulsoup4>=4.13.0"
   ],
-  "version": "0.6.3"
+  "version": "0.6.4"
 }

@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 
 from homeassistant.components.frontend import add_extra_js_url
 from homeassistant.components.http import StaticPathConfig
+from homeassistant.components.lovelace.resources import ResourceStorageCollection
 
 from ..const import JSMODULES, URL_BASE  # noqa: TID252
 
@@ -56,12 +57,15 @@ class JSModuleRegistration:
     async def _async_register_lovelace_resources(self) -> None:
         """Register all card modules as Lovelace resources in storage mode."""
         lovelace = self.hass.data.get("lovelace")
-        if not lovelace or lovelace.mode != "storage":
+        if not lovelace:
             return
 
         resources = lovelace.resources
-        if hasattr(resources, "async_get_info"):
-            await resources.async_get_info()
+        if not isinstance(resources, ResourceStorageCollection):
+            _LOGGER.debug("Skipping Lovelace resource registration in YAML mode")
+            return
+
+        await resources.async_get_info()
 
         existing_resources = [
             resource
