@@ -17,7 +17,7 @@ from .api import (
     HelgebibliotekenApiClientCommunicationError,
     HelgebibliotekenApiClientError,
 )
-from .const import DOMAIN, LOGGER
+from .const import DOMAIN, LOGGER, USER_AGENT
 
 # Personnummer format: ÅÅMMDDXXXX (10 digits)
 PERSONNUMMER_DIGITS = 10
@@ -98,16 +98,21 @@ class HelgebibliotekenFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
 
     async def async_step_reauth(
         self,
-        user_input: dict | None = None,
+        _entry_data: dict | None = None,
     ) -> config_entries.ConfigFlowResult:
         """Handle reauth upon an API authentication error."""
+        return await self.async_step_reauth_confirm()
+
+    async def async_step_reauth_confirm(
+        self,
+        user_input: dict | None = None,
+    ) -> config_entries.ConfigFlowResult:
+        """Confirm reauthentication with updated credentials."""
         _errors = {}
 
-        # Get the entry being reauth'd
         try:
             reauth_entry = self._get_reauth_entry()
         except ValueError, KeyError:
-            # If we can't get the entry yet, return an error
             return self.async_abort(reason="reauth_failed_missing_entry")
 
         if user_input is not None:
@@ -141,13 +146,12 @@ class HelgebibliotekenFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                     await self.hass.config_entries.async_reload(reauth_entry.entry_id)
                     return self.async_abort(reason="reauth_successful")
 
-        # Get username from entry for default value
         username_default = vol.UNDEFINED
         if hasattr(reauth_entry, "data"):
             username_default = reauth_entry.data.get(CONF_USERNAME, vol.UNDEFINED)
 
         return self.async_show_form(
-            step_id="reauth",
+            step_id="reauth_confirm",
             data_schema=vol.Schema(
                 {
                     vol.Required(
@@ -196,7 +200,10 @@ class HelgebibliotekenFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
         # Use a session with ThreadedResolver to avoid aiodns/pycares
         # compatibility issues (e.g. Channel.getaddrinfo signature mismatch).
         connector = aiohttp.TCPConnector(resolver=ThreadedResolver())
-        session = aiohttp.ClientSession(connector=connector)
+        session = aiohttp.ClientSession(
+            connector=connector,
+            headers={"User-Agent": USER_AGENT},
+        )
         try:
             client = HelgebibliotekenApiClient(
                 username=username,

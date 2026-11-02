@@ -7,6 +7,13 @@
                     "username": "Personnummer",
                     "password": "PIN"
                 }
+            },
+            "reauth_confirm": {
+                "description": "Personnummer/PIN no longer works. Enter current credentials.",
+                "data": {
+                    "username": "Personnummer",
+                    "password": "PIN"
+                }
             }
         },
         "error": {

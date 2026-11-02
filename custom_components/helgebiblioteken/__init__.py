@@ -25,7 +25,7 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.loader import async_get_loaded_integration
 
 from .api import HelgebibliotekenApiClient, HelgebibliotekenApiClientError
-from .const import DOMAIN, LOGGER
+from .const import DOMAIN, LOGGER, USER_AGENT
 from .coordinator import HelgebibliotekenDataUpdateCoordinator
 from .data import HelgebibliotekenData
 from .frontend import JSModuleRegistration
@@ -81,7 +81,10 @@ async def async_setup_entry(  # noqa: PLR0915
     coordinator.config_entry = entry
     # Use ThreadedResolver to avoid aiodns/pycares compatibility issues.
     connector = aiohttp.TCPConnector(resolver=ThreadedResolver())
-    session = aiohttp.ClientSession(connector=connector)
+    session = aiohttp.ClientSession(
+        connector=connector,
+        headers={"User-Agent": USER_AGENT},
+    )
     entry.runtime_data = HelgebibliotekenData(
         client=HelgebibliotekenApiClient(
             username=entry.data[CONF_USERNAME],

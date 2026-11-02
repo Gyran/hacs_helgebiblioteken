@@ -7,6 +7,13 @@
                     "username": "Personnummer",
                     "password": "PIN-kod"
                 }
+            },
+            "reauth_confirm": {
+                "description": "Personnummer/PIN-kod fungerar inte längre. Ange aktuella uppgifter.",
+                "data": {
+                    "username": "Personnummer",
+                    "password": "PIN-kod"
+                }
             }
         },
         "error": {

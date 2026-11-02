@@ -27,13 +27,17 @@ class JSModuleRegistration:
         self._registered = False
 
     async def async_register(self) -> None:
-        """Register static path, shell JS, and Lovelace resources."""
+        """Register static path and card modules."""
         if self._registered:
             return
 
         await self._async_register_path()
-        self._register_extra_js()
-        await self._async_register_lovelace_resources()
+        # Storage resources load with the dashboard, after the scoped
+        # customElements polyfill. extra_js is injected into the shell and
+        # races that polyfill, so use it only when storage resources cannot
+        # be created (YAML mode, or Lovelace not ready yet).
+        if not await self._async_register_lovelace_resources():
+            self._register_extra_js()
         self._registered = True
 
     async def _async_register_path(self) -> None:
@@ -48,22 +52,23 @@ class JSModuleRegistration:
             _LOGGER.debug("Static path already registered: %s", URL_BASE)
 
     def _register_extra_js(self) -> None:
-        """Load card scripts with the shell so Lovelace resolves elements in time."""
+        """Load card scripts from the shell when storage resources are unavailable."""
         for module in JSMODULES:
             url = f"{URL_BASE}/{module['filename']}?v={module['version']}"
             add_extra_js_url(self.hass, url)
             _LOGGER.debug("Registered extra JS module URL: %s", url)
 
-    async def _async_register_lovelace_resources(self) -> None:
-        """Register all card modules as Lovelace resources in storage mode."""
+    async def _async_register_lovelace_resources(self) -> bool:
+        """Register card modules as Lovelace resources in storage mode."""
         lovelace = self.hass.data.get("lovelace")
         if not lovelace:
-            return
+            _LOGGER.debug("Lovelace data missing; falling back to extra JS")
+            return False
 
         resources = lovelace.resources
         if not isinstance(resources, ResourceStorageCollection):
             _LOGGER.debug("Skipping Lovelace resource registration in YAML mode")
-            return
+            return False
 
         await resources.async_get_info()
 
@@ -111,6 +116,7 @@ class JSModuleRegistration:
                     "url": f"{url}?v={module['version']}",
                 }
             )
+        return True
 
     @staticmethod
     def _get_path(url: str) -> str:

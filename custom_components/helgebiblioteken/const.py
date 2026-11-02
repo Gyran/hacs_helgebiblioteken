@@ -9,6 +9,10 @@ LOGGER: Logger = getLogger(__package__)
 
 DOMAIN: Final[str] = "helgebiblioteken"
 ATTRIBUTION: Final[str] = "Data provided by HelGe-biblioteken"
+USER_AGENT: Final[str] = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+)
 
 # Read version from manifest for frontend module registration
 _MANIFEST_PATH = Path(__file__).parent / "manifest.json"

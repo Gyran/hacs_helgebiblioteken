@@ -163,6 +163,9 @@ class OverdueLoansBinarySensor(_LoanDueBinarySensor):
         loans = self.coordinator.data.get("loans", [])
         matching = []
         for loan in loans:
+            if loan.get("overdue") is True:
+                matching.append(loan)
+                continue
             due_date = _parse_due_date(loan)
             if due_date is not None and due_date < today:
                 matching.append(loan)
@@ -176,11 +179,13 @@ class DueSoonLoansBinarySensor(_LoanDueBinarySensor):
         loans = self.coordinator.data.get("loans", [])
         matching = []
         for loan in loans:
+            if loan.get("overdue") is True:
+                continue
             due_date = _parse_due_date(loan)
-            if due_date is None:
+            if due_date is None or due_date < today:
                 continue
             days_left = (due_date - today).days
-            if 0 <= days_left <= DUE_SOON_DAYS:
+            if days_left <= DUE_SOON_DAYS:
                 matching.append(loan)
         return matching
 

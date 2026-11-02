@@ -45,12 +45,23 @@ A Home Assistant custom integration for HelGe-biblioteken that allows you to tra
 
 ## Lovelace Cards
 
-The integration loads card scripts automatically.
+The integration registers the cards as dashboard resources. They show up in the card picker.
 
 - Loans card: **type** `custom:helgebiblioteken-loans-card`, **entity** `sensor.helgebiblioteken_loan_count`
 - Reservations card: **type** `custom:helgebiblioteken-reservations-card`, **entity** `sensor.helgebiblioteken_reservation_count`
 
-In the UI editor, use **Add card → Manual** and paste YAML, or add cards in YAML mode.
+After an update, the Android companion app can keep the old frontend. In the app: **Settings → Companion app → Troubleshooting → Reset frontend cache**, then force-stop and open the app again.
+
+YAML-mode dashboards cannot be updated from storage. Add the resources yourself:
+
+```yaml
+lovelace:
+  resources:
+    - url: /helgebiblioteken/helgebiblioteken-loans-card.js?v=0.6.6
+      type: module
+    - url: /helgebiblioteken/helgebiblioteken-reservations-card.js?v=0.6.6
+      type: module
+```
 
 Example:
 

@@ -11,6 +11,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from .api import (
     HelgebibliotekenApiClientAuthenticationError,
     HelgebibliotekenApiClientError,
+    HelgebibliotekenApiClientSessionExpiredError,
 )
 
 if TYPE_CHECKING:
@@ -34,6 +35,8 @@ class HelgebibliotekenDataUpdateCoordinator(DataUpdateCoordinator):
             data = await self.config_entry.runtime_data.client.async_get_data()
         except HelgebibliotekenApiClientAuthenticationError as exception:
             raise ConfigEntryAuthFailed(exception) from exception
+        except HelgebibliotekenApiClientSessionExpiredError as exception:
+            raise UpdateFailed(exception) from exception
         except HelgebibliotekenApiClientError as exception:
             raise UpdateFailed(exception) from exception
         else:

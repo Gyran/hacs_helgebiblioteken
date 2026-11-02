@@ -29,40 +29,41 @@ class HelgebibliotekenLoansCard extends HTMLElement {
     this.updateCard();
   }
 
-  static getStubConfig() {
-    return { entity: 'sensor.helgebiblioteken_loan_count', renew_within_days: 3 };
+  static getStubConfig(hass) {
+    return {
+      entity: findHelgeEntity(hass, 'loan_count') || 'sensor.helgebiblioteken_loan_count',
+      renew_within_days: 3,
+    };
   }
 
-  static async getConfigSchema() {
-    return [
-      {
-        name: 'entity',
-        required: true,
-        selector: {
-          entity: {
-            filter: [
-              { domain: 'sensor', integration: 'helgebiblioteken' },
-            ],
+  static getConfigForm() {
+    return {
+      schema: [
+        {
+          name: 'entity',
+          required: true,
+          selector: {
+            entity: {
+              filter: [
+                { domain: 'sensor', integration: 'helgebiblioteken' },
+              ],
+            },
           },
         },
-      },
-      {
-        name: 'renew_within_days',
-        required: false,
-        selector: {
-          number: {
-            min: 0,
-            max: 30,
-            step: 1,
-            mode: 'box',
+        {
+          name: 'renew_within_days',
+          required: false,
+          selector: {
+            number: {
+              min: 0,
+              max: 30,
+              step: 1,
+              mode: 'box',
+            },
           },
         },
-      },
-    ];
-  }
-
-  static getConfigElement() {
-    return document.createElement('helgebiblioteken-loans-card-editor');
+      ],
+    };
   }
 
   getCardSize() {
@@ -81,19 +82,24 @@ class HelgebibliotekenLoansCard extends HTMLElement {
     if (!match) {
       return null;
     }
-    const parsed = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])));
+    const parsed = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
     return Number.isNaN(parsed.getTime()) ? null : parsed;
   }
 
   _isDueSoonLoan(loan, days) {
+    if (loan?.can_renew === false || !loan?.loan_id || loan?.renewal_count === 0) {
+      return false;
+    }
+    if (loan?.overdue === true) {
+      return true;
+    }
     const due = this._parseIsoDate(loan?.due_date);
-    if (!due || loan?.can_renew === false || !loan?.loan_id || loan?.renewal_count === 0) {
+    if (!due) {
       return false;
     }
     const now = new Date();
-    const todayUtc = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
-    const dueUtc = Date.UTC(due.getUTCFullYear(), due.getUTCMonth(), due.getUTCDate());
-    const daysUntilDue = Math.floor((dueUtc - todayUtc) / 86400000);
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const daysUntilDue = Math.round((due.getTime() - today.getTime()) / 86400000);
     return daysUntilDue <= days;
   }
 
@@ -361,112 +367,44 @@ class HelgebibliotekenLoansCard extends HTMLElement {
   }
 }
 
-class HelgebibliotekenLoansCardEditor extends HTMLElement {
-  constructor() {
-    super();
-    this.attachShadow({ mode: 'open' });
-    this._hass = null;
-    this._config = {};
-  }
-
-  setConfig(config) {
-    this._config = config || {};
-    this.render();
-  }
-
-  set hass(hass) {
-    this._hass = hass;
-    this.render();
-  }
-
-  _onValueChanged(event) {
-    const nextEntity = event?.detail?.value?.entity;
-    const nextDays = Number(event?.detail?.value?.renew_within_days);
-    const normalizedDays = Number.isInteger(nextDays) && nextDays >= 0 ? nextDays : 3;
-    if (nextEntity === this._config.entity && normalizedDays === this._config.renew_within_days) {
-      return;
-    }
-
-    this._config = {
-      type: CARD_TAG,
-      ...this._config,
-      entity: nextEntity,
-      renew_within_days: normalizedDays,
-    };
-
-    this.dispatchEvent(
-      new CustomEvent('config-changed', {
-        detail: { config: this._config },
-        bubbles: true,
-        composed: true,
-      }),
-    );
-  }
-
-  render() {
-    this.shadowRoot.innerHTML = `
-      <div class="editor">
-        <div id="form-root"></div>
-      </div>
-      <style>
-        .editor {
-          display: grid;
-          gap: 12px;
-        }
-      </style>
-    `;
-
-    const formRoot = this.shadowRoot.getElementById('form-root');
-    if (!formRoot || !this._hass) {
-      return;
-    }
-
-    const form = document.createElement('ha-form');
-    form.hass = this._hass;
-    form.data = {
-      entity: this._config.entity || '',
-      renew_within_days: Number.isInteger(this._config.renew_within_days)
-        ? this._config.renew_within_days
-        : 3,
-    };
-    form.schema = [
-      {
-        name: 'entity',
-        required: true,
-        selector: {
-          entity: {
-            filter: [
-              { domain: 'sensor', integration: 'helgebiblioteken' },
-            ],
-          },
-        },
-      },
-      {
-        name: 'renew_within_days',
-        required: false,
-        selector: {
-          number: {
-            min: 0,
-            max: 30,
-            step: 1,
-            mode: 'box',
-          },
-        },
-      },
-    ];
-    form.addEventListener('value-changed', (event) => this._onValueChanged(event));
-    formRoot.appendChild(form);
-  }
-}
-
 const CARD_TAG = 'helgebiblioteken-loans-card';
 
-if (!customElements.get(CARD_TAG)) {
-  customElements.define(CARD_TAG, HelgebibliotekenLoansCard);
+function findHelgeEntity(hass, fragment) {
+  const states = hass?.states || {};
+  return Object.keys(states).find((entityId) => {
+    const registry = hass.entities?.[entityId];
+    return registry?.platform === 'helgebiblioteken' && entityId.includes(fragment);
+  });
 }
-if (!customElements.get('helgebiblioteken-loans-card-editor')) {
-  customElements.define('helgebiblioteken-loans-card-editor', HelgebibliotekenLoansCardEditor);
+
+function defineCard(tag, elementClass) {
+  const tryDefine = () => {
+    if (customElements.get(tag)) {
+      return true;
+    }
+    try {
+      customElements.define(tag, elementClass);
+    } catch (_err) {
+      // Same registry already has this tag.
+    }
+    return Boolean(customElements.get(tag));
+  };
+
+  tryDefine();
+  customElements.whenDefined('home-assistant').then(() => {
+    tryDefine();
+  }).catch(() => {});
+
+  let attempts = 0;
+  const timer = setInterval(() => {
+    attempts += 1;
+    if (tryDefine() || attempts > 40) {
+      clearInterval(timer);
+    }
+  }, 50);
 }
+
+defineCard(CARD_TAG, HelgebibliotekenLoansCard);
 
 window.customCards = window.customCards || [];
 if (!window.customCards.some((card) => card.type === CARD_TAG)) {

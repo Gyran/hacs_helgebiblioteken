@@ -7,21 +7,37 @@ import re
 import socket
 from collections import defaultdict
 from datetime import UTC, date, datetime
+from http import HTTPStatus
 from logging import getLogger
 from typing import Any, NoReturn
-from urllib.parse import urljoin
+from urllib.parse import quote, urljoin, urlsplit
 
 import aiohttp
 from bs4 import BeautifulSoup
+from homeassistant.util import dt as dt_util
 
 TIMEOUT = 10
 MIN_TEXT_LENGTH = 10
-MIN_TABLE_CELLS = 3
 MIN_LOGIN_INPUTS = 2
 MAX_DEBUG_VALUE_LEN = 50
+MAX_REDIRECTS = 20
 MAX_LOAN_PAGES = 20  # Safety limit when following pagination
 MAX_RESERVATION_PAGES = 20  # Safety limit when following pagination
 OVERVIEW_PATH = "/protected/my-account/overview"
+_RENEW_SUCCESS_PHRASES = (
+    "omlånad",
+    "har lånats om",
+    "lånetiden är förlängd",
+    "lånetiden har förlängts",
+    "lånet har förlängts",
+    "omlån genomfört",
+)
+_RENEW_ERROR_PHRASES = (
+    "kan inte lånas om",
+    "inte möjligt att låna om",
+    "max antal omlån",
+    "går inte att låna om",
+)
 
 _LOGGER = getLogger(__name__)
 
@@ -42,19 +58,119 @@ class HelgebibliotekenApiClientAuthenticationError(
     """Exception to indicate an authentication error."""
 
 
+class HelgebibliotekenApiClientSessionExpiredError(
+    HelgebibliotekenApiClientError,
+):
+    """Exception to indicate the portal session expired."""
+
+
+_CREDENTIAL_ERROR_PHRASES = (
+    "felaktigt",
+    "fel personnummer",
+    "fel pin",
+    "fel pinkod",
+    "ogiltigt",
+)
+
+
 def _raise_session_expired() -> NoReturn:
     msg = "Session expired, please try again"
-    raise HelgebibliotekenApiClientAuthenticationError(msg)
+    raise HelgebibliotekenApiClientSessionExpiredError(msg)
 
 
 def _verify_response_or_raise(response: aiohttp.ClientResponse) -> None:
     """Verify that the response is valid."""
     if response.status in (401, 403):
-        msg = "Invalid credentials"
-        raise HelgebibliotekenApiClientAuthenticationError(
-            msg,
-        )
+        # Portal uses HTML 200 for a bad PIN. 401/403 here is a dead session.
+        msg = "Session expired"
+        raise HelgebibliotekenApiClientSessionExpiredError(msg)
     response.raise_for_status()
+
+
+def _is_login_success_url(url_lower: str) -> bool:
+    """Return True if the URL indicates a successful login redirect."""
+    if (
+        "/protected/my-account/overview" in url_lower
+        or "p_p_auth=" in url_lower
+        or "arenaccount" in url_lower
+    ):
+        return True
+    return "patronlogin" in url_lower and "p_p_lifecycle=0" in url_lower
+
+
+def _is_login_page_url(url_lower: str) -> bool:
+    """Return True if the URL still points at the login form."""
+    return "patronlogin" in url_lower and (
+        "p_p_lifecycle=1" in url_lower
+        or "signin" in url_lower
+        or "wicket:interface" in url_lower
+    )
+
+
+def prepare_arena_request(
+    url: str, method: str = "GET", data: Any = None
+) -> tuple[str, str, Any]:
+    """POST query-string GETs so Arena skips the LTE3M script gate."""
+    method_upper = method.upper()
+    if method_upper == "GET" and urlsplit(url).query:
+        return url, "POST", {}
+    return url, method_upper, data
+
+
+def is_lte3m_challenge(html: str) -> bool:
+    """Return True when Arena served the JavaScript access check."""
+    return "function leastFactor" in html and "LTE3M=" in html
+
+
+def unwrap_wicket_response(body: str) -> str:
+    """Return HTML inside a Wicket ajax-response, or the body unchanged."""
+    if not re.search(r"<ajax-response", body, re.IGNORECASE):
+        return body
+    chunks = re.findall(r"<!\[CDATA\[(.*?)\]\]>", body, flags=re.DOTALL)
+    return "\n".join(chunks) if chunks else body
+
+
+def with_p_auth(action: str, html: str) -> str:
+    """Append Liferay.authToken as p_auth when the form action lacks it."""
+    if re.search(r"[?&]p_auth=", action):
+        return action
+    match = re.search(r'Liferay\.authToken\s*=\s*"([^"]+)"', html)
+    if not match:
+        return action
+    separator = "&" if "?" in action else "?"
+    return f"{action}{separator}p_auth={quote(match.group(1), safe='')}"
+
+
+def is_logged_in_html(html: str) -> bool:
+    """Return True when the page shows a patron session, not a Liferay flag."""
+    if "du blev inte inloggad" in html.lower():
+        return False
+    if "arena-logout-link" in html or "arena-login-greeting" in html:
+        return True
+    if re.search(
+        r"isSignedIn\s*:\s*function\s*\(\s*\)\s*\{\s*return\s+true\s*\}",
+        html,
+    ):
+        return True
+    return bool(re.search(r"<body\b[^>]*\bsigned-in\b", html, re.IGNORECASE))
+
+
+def _visible_login_text(soup: BeautifulSoup) -> str:
+    """Return visible text from the login portlet or login form."""
+    login_portlet = soup.find(
+        "div", {"id": re.compile(r"patronLogin.*", re.IGNORECASE)}
+    )
+    source = login_portlet
+    if source is None:
+        username_input = soup.find(
+            "input",
+            {"name": re.compile(r".*openTextUsername.*", re.IGNORECASE)},
+        )
+        if username_input:
+            source = username_input.find_parent("form")
+    if source is None:
+        return ""
+    return source.get_text(" ", strip=True).lower()
 
 
 class HelgebibliotekenApiClient:
@@ -74,6 +190,61 @@ class HelgebibliotekenApiClient:
         self._session = session
         self._logged_in = False
 
+    async def _async_request(
+        self,
+        url: str,
+        *,
+        method: str = "GET",
+        data: Any = None,
+    ) -> tuple[str, str]:
+        """Fetch one Arena page, following redirects and skipping LTE3M."""
+        current = url
+        current_method = method
+        body = data
+        for _hop in range(MAX_REDIRECTS):
+            current, current_method, body = prepare_arena_request(
+                current, current_method, body
+            )
+            request_kwargs: dict[str, Any] = {"allow_redirects": False}
+            if current_method != "GET" and body is not None:
+                request_kwargs["data"] = body
+            async with asyncio.timeout(TIMEOUT):
+                async with self._session.request(
+                    current_method, current, **request_kwargs
+                ) as response:
+                    if (
+                        HTTPStatus.MULTIPLE_CHOICES
+                        <= response.status
+                        < HTTPStatus.BAD_REQUEST
+                    ):
+                        location = response.headers.get("Location")
+                        await response.read()
+                        if not location:
+                            msg = (
+                                "HelGe redirect without Location: "
+                                f"HTTP {response.status}"
+                            )
+                            raise HelgebibliotekenApiClientCommunicationError(msg)
+                        if response.status == HTTPStatus.SEE_OTHER or (
+                            response.status
+                            in (HTTPStatus.MOVED_PERMANENTLY, HTTPStatus.FOUND)
+                            and current_method not in ("GET", "HEAD")
+                        ):
+                            current_method = "GET"
+                            body = None
+                        current = urljoin(str(response.url), location)
+                        continue
+                    _verify_response_or_raise(response)
+                    html = await response.text()
+                    final_url = str(response.url)
+            if is_lte3m_challenge(html):
+                msg = "HelGe JS access check still hit"
+                raise HelgebibliotekenApiClientCommunicationError(msg)
+            return unwrap_wicket_response(html), final_url
+
+        msg = "Too many redirects"
+        raise HelgebibliotekenApiClientCommunicationError(msg)
+
     async def async_login(self) -> None:  # noqa: PLR0912, PLR0915
         """Login to HelGe-biblioteken."""
         # Never log credential values (username/password) in debug output.
@@ -81,17 +252,16 @@ class HelgebibliotekenApiClient:
             _LOGGER.debug("Already logged in, skipping login")
             return
 
+        self._session.cookie_jar.clear()
+        self._logged_in = False
         _LOGGER.debug("Starting login process")
         try:
             # First, get the login page to get the form structure
             _LOGGER.debug("Fetching login page from %s", self.BASE_URL)
             async with asyncio.timeout(TIMEOUT):
-                async with self._session.get(f"{self.BASE_URL}/") as response:
-                    _LOGGER.debug("Login page response status: %s", response.status)
-                    _verify_response_or_raise(response)
-                    html = await response.text()
-                    _LOGGER.debug("Login page HTML length: %d bytes", len(html))
-                    soup = BeautifulSoup(html, "html.parser")
+                html, _login_page_url = await self._async_request(f"{self.BASE_URL}/")
+                _LOGGER.debug("Login page HTML length: %d bytes", len(html))
+                soup = BeautifulSoup(html, "html.parser")
 
                 # Find the actual login form to get the correct action URL
                 login_form = None
@@ -205,39 +375,40 @@ class HelgebibliotekenApiClient:
                     _LOGGER.warning("No form fields found - using fallback field names")
 
                 # Perform login
+                login_url = with_p_auth(login_url, html)
                 _LOGGER.debug("Submitting login form to %s", login_url)
-                async with self._session.post(
+                html, final_url = await self._async_request(
                     login_url,
+                    method="POST",
                     data=form_data,
-                    allow_redirects=True,
-                ) as response:
-                    _LOGGER.debug("Login response status: %s", response.status)
-                    final_url = str(response.url)
-                    _LOGGER.debug("Login response final URL: %s", final_url)
-                    html = await response.text()
-                    _LOGGER.debug("Login response HTML length: %d bytes", len(html))
-                    self._verify_login_success(html, final_url)
+                )
+                _LOGGER.debug("Login response final URL: %s", final_url)
+                _LOGGER.debug("Login response HTML length: %d bytes", len(html))
+                self._verify_login_success(html, final_url)
 
-                    # Verify session by trying to access protected page
-                    _LOGGER.debug("Verifying session by accessing protected page")
-                    async with self._session.get(
-                        f"{self.BASE_URL}/protected/my-account/overview"
-                    ) as verify_response:
-                        verify_html = await verify_response.text()
-                        verify_html_lower = verify_html.lower()
-                        if "du har inte loggat in" in verify_html_lower:
-                            _LOGGER.error(
-                                "Login verification failed - "
-                                "cannot access protected page"
-                            )
-                            self._logged_in = False
-                            msg = "Login failed - session not valid"
-                            raise HelgebibliotekenApiClientAuthenticationError(msg)  # noqa: TRY301
-                        _LOGGER.debug("Session verified - can access protected page")
+                # Verify session by trying to access protected page
+                _LOGGER.debug("Verifying session by accessing protected page")
+                verify_html, _verify_url = await self._async_request(
+                    f"{self.BASE_URL}/protected/my-account/overview"
+                )
+                if (
+                    "du har inte loggat in" in verify_html.lower()
+                    or not is_logged_in_html(verify_html)
+                ):
+                    _LOGGER.error(
+                        "Login verification failed - cannot access protected page"
+                    )
+                    self._logged_in = False
+                    msg = "Login failed - session not valid"
+                    raise HelgebibliotekenApiClientSessionExpiredError(msg)  # noqa: TRY301
+                _LOGGER.debug("Session verified - can access protected page")
 
-                    _LOGGER.debug("Login successful")
+                _LOGGER.debug("Login successful")
 
-        except HelgebibliotekenApiClientAuthenticationError:
+        except (
+            HelgebibliotekenApiClientAuthenticationError,
+            HelgebibliotekenApiClientSessionExpiredError,
+        ):
             raise
         except TimeoutError as exception:
             msg = f"Timeout error during login - {exception}"
@@ -455,75 +626,38 @@ class HelgebibliotekenApiClient:
 
     def _verify_login_success(self, html: str, final_url: str) -> None:
         """Verify that login was successful."""
-        html_lower = html.lower()
         url_lower = final_url.lower()
         soup = BeautifulSoup(html, "html.parser")
 
-        # Check for error messages first - look for various error indicators
-        error_indicators = [
-            "felaktigt",
-            "invalid",
-            "fel personnummer",
-            "fel pin",
-            "ogiltigt",
-            "error",
-            "felaktig",
-        ]
-        for error_text in error_indicators:
-            if error_text in html_lower:
-                # Try to extract the actual error message
-                error_elements = soup.find_all(
-                    string=re.compile(error_text, re.IGNORECASE)
-                )
-                if error_elements:
-                    error_msg = error_elements[0].strip()[:200]
-                    _LOGGER.error("Login failed: %s", error_msg)
-                else:
-                    _LOGGER.error(
-                        "Login failed: Invalid credentials detected in response"
-                    )
-                msg = "Invalid credentials"
-                raise HelgebibliotekenApiClientAuthenticationError(msg)
-
-        # On success, URL has p_p_auth or protected/my-account/overview
-        if (
-            "/protected/my-account/overview" in url_lower
-            or "p_p_auth=" in url_lower
-            or "arenaccount" in url_lower
-        ):
+        # Success URL or patron markers first. Do not scan whole HTML for
+        # generic "error"/"invalid".
+        if _is_login_success_url(url_lower) or is_logged_in_html(html):
             self._logged_in = True
             _LOGGER.debug("Login verified successfully - on protected page")
             return
 
-        # Portal portlet: lifecycle=0 in redirect URL after successful sign-in
-        if "patronlogin" in url_lower and "p_p_lifecycle=0" in url_lower:
-            self._logged_in = True
-            _LOGGER.debug(
-                "Login verified successfully - patronLogin lifecycle=0 redirect"
-            )
-            return
+        if "du blev inte inloggad" in html.lower():
+            _LOGGER.error("Login failed: Arena reported the patron was not logged in")
+            msg = "Invalid credentials"
+            raise HelgebibliotekenApiClientAuthenticationError(msg)
 
-        # Check if we're still on the login page - if so, login failed
-        if "patronlogin" in url_lower and (
-            "p_p_lifecycle=1" in url_lower
-            or "signin" in url_lower
-            or "wicket:interface" in url_lower
-        ):
+        visible = _visible_login_text(soup)
+        for phrase in _CREDENTIAL_ERROR_PHRASES:
+            if phrase in visible:
+                _LOGGER.error(
+                    "Login failed: credential error in login form (%s)",
+                    phrase,
+                )
+                msg = "Invalid credentials"
+                raise HelgebibliotekenApiClientAuthenticationError(msg)
+
+        if _is_login_page_url(url_lower):
             _LOGGER.error(
                 "Login failed - still on login page after submission. "
                 "Check if credentials are correct or if form fields are missing."
             )
-            # Look for any visible error messages in the page
-            error_divs = soup.find_all(
-                "div", class_=re.compile(r"error|alert|warning", re.IGNORECASE)
-            )
-            if error_divs:
-                for error_div in error_divs[:3]:  # Check first 3 error divs
-                    error_text = error_div.get_text(strip=True)
-                    if error_text:
-                        _LOGGER.debug("Found error message: %s", error_text[:200])
             msg = "Login failed - still on login page"
-            raise HelgebibliotekenApiClientAuthenticationError(msg)
+            raise HelgebibliotekenApiClientSessionExpiredError(msg)
 
         _LOGGER.error(
             "Login verification failed - response does not contain "
@@ -532,7 +666,7 @@ class HelgebibliotekenApiClient:
         _LOGGER.debug("Final URL: %s", final_url)
         _LOGGER.debug("Response preview (first 500 chars): %s", html[:500])
         msg = "Login failed - unable to verify session"
-        raise HelgebibliotekenApiClientAuthenticationError(msg)
+        raise HelgebibliotekenApiClientSessionExpiredError(msg)
 
     @property
     def _overview_url(self) -> str:
@@ -541,18 +675,18 @@ class HelgebibliotekenApiClient:
 
     async def _fetch_overview_html(self, url: str) -> tuple[str, BeautifulSoup]:
         """Fetch an overview page and return HTML plus parsed soup."""
-        async with asyncio.timeout(TIMEOUT):
-            async with self._session.get(url) as response:
-                _LOGGER.debug("Overview page response status: %s", response.status)
-                _verify_response_or_raise(response)
-                html = await response.text()
-                _LOGGER.debug("Overview page HTML length: %d bytes", len(html))
+        html, _final_url = await self._async_request(url)
+        _LOGGER.debug("Overview page HTML length: %d bytes", len(html))
         return html, BeautifulSoup(html, "html.parser")
 
     def _verify_overview_logged_in(self, html: str) -> None:
         """Raise if the overview page indicates the session expired."""
         html_lower = html.lower()
-        if "du har inte loggat in" in html_lower or "not logged in" in html_lower:
+        if (
+            "du har inte loggat in" in html_lower
+            or "not logged in" in html_lower
+            or not is_logged_in_html(html)
+        ):
             _LOGGER.warning("Session expired - not logged in on overview page")
             self._logged_in = False
             _raise_session_expired()
@@ -768,7 +902,7 @@ class HelgebibliotekenApiClient:
                 )
                 return all_loans, all_reservations  # noqa: TRY300
 
-            except HelgebibliotekenApiClientAuthenticationError:
+            except HelgebibliotekenApiClientSessionExpiredError:
                 if attempt == 0:
                     _LOGGER.warning(
                         "Session expired during account fetch, re-logging in and "
@@ -912,142 +1046,120 @@ class HelgebibliotekenApiClient:
                 return urljoin(current_url, href)
         return None
 
-    def _parse_loan_id_from_title_cell(self, title_cell: Any) -> str | None:
-        """Parse the leading bibliographic ID from the title cell text."""
-        title_text = title_cell.get_text(" ", strip=True)
-        match = re.match(r"^\s*(\d+)", title_text)
-        return match.group(1) if match else None
+    @staticmethod
+    def _class_tokens(node: Any) -> set[str]:
+        """Return CSS classes on a tag."""
+        classes = node.get("class") or []
+        if isinstance(classes, str):
+            return set(classes.split())
+        return set(classes)
 
-    def _parse_loan_rows(  # noqa: PLR0912, PLR0915
-        self, loans_portlet: Any
-    ) -> list[dict[str, Any]]:
-        """Parse table rows with loan and renewal metadata."""
+    @staticmethod
+    def _node_text(node: Any) -> str:
+        """Return collapsed text, or an empty string when the node is missing."""
+        if node is None:
+            return ""
+        return " ".join(node.get_text(" ", strip=True).split())
+
+    @staticmethod
+    def _split_branch_date(value: str) -> tuple[str, str | None]:
+        """Split 'Branch YYYY-MM-DD' into branch and loaned-on date."""
+        cleaned = re.sub(r"^Lånad på:\s*", "", value, flags=re.IGNORECASE).strip()
+        match = re.match(r"^(.*)\s(\d{4}-\d{2}-\d{2})$", cleaned)
+        if not match:
+            return cleaned, None
+        return match.group(1).strip(), match.group(2)
+
+    @staticmethod
+    def _first_iso_date(value: str) -> str:
+        """Return the first ISO date in text, or the original text."""
+        match = re.search(r"\d{4}-\d{2}-\d{2}", value)
+        return match.group(0) if match else value
+
+    @staticmethod
+    def _parse_remaining_renewals(value: str) -> int | None:
+        """Parse 'Återstående antal omlån: N'."""
+        match = re.search(
+            r"Återstående antal omlån:\s*(\d+)",
+            value,
+            re.IGNORECASE,
+        )
+        if not match:
+            return None
+        return int(match.group(1))
+
+    def _extract_renew_url(self, row: Any) -> str | None:
+        """Return the per-row Låna om location, if Arena rendered one."""
+        status = row.select_one(".arena-renewal-status")
+        if status is None:
+            return None
+        for node in status.find_all("input"):
+            onclick = node.get("onclick") or ""
+            match = re.search(
+                r"""window\.location\.href\s*=\s*['"]([^'"]+)['"]""",
+                onclick,
+                re.IGNORECASE,
+            )
+            if match:
+                return match.group(1)
+        return None
+
+    def _parse_loan_rows(self, loans_portlet: Any) -> list[dict[str, Any]]:
+        """Parse loan rows from Arena's loan table."""
         rows_data: list[dict[str, Any]] = []
-        loans_table = loans_portlet.find("table")
-        if not loans_table:
-            return rows_data
-
-        tbody = loans_table.find("tbody")
-        rows = tbody.find_all("tr") if tbody else loans_table.find_all("tr")
-
-        for row in rows:
-            if row.find_parent("thead"):
+        for row in loans_portlet.find_all("tr", id=re.compile(r"^loan-row-id-")):
+            loan_id = self._node_text(row.find("span", class_="arena-record-id"))
+            if not loan_id:
                 continue
-            all_cells = row.find_all(["th", "td"])
-            th_cells = row.find_all("th")
-            td_cells = row.find_all("td")
-            if len(th_cells) == len(all_cells) and len(all_cells) > 0:
-                continue
-            cells = td_cells or all_cells
-            if len(cells) < MIN_TABLE_CELLS:
-                continue
-
-            title_cell = None
-            for cell in cells:
-                cell_text = cell.get_text()
-                if cell.find("a") or "Av:" in cell_text:
-                    title_cell = cell
-                    break
-            if not title_cell:
-                title_cell = cells[0]
-
-            title_link = title_cell.find("a")
-            title = title_link.get_text(strip=True) if title_link else ""
-            loan_id = self._parse_loan_id_from_title_cell(title_cell)
-
-            cell_text = title_cell.get_text()
-            author_match = re.search(
-                r"Av:\s*(.+?)(?=\s+Utgivningsår:|$)", cell_text, re.DOTALL
+            classes = self._class_tokens(row)
+            year_text = self._node_text(
+                row.select_one(".arena-record-year .arena-value")
             )
-            year_match = re.search(r"Utgivningsår:\s*(\d+)", cell_text)
-            media_match = re.search(
-                r"Medietyp:\s*(.+?)(?=\s+Lånad på:|$)", cell_text, re.DOTALL
-            )
-            borrowed_match = re.search(r"Lånad på:\s*([^\n]+)", cell_text)
-
-            author = author_match.group(1).strip() if author_match else ""
-            year = None
-            if year_match:
+            publication_year = None
+            if year_text:
                 try:
-                    year = int(year_match.group(1))
-                except ValueError, IndexError:
-                    year = None
-            media_type = media_match.group(1).strip() if media_match else ""
-            borrowed_info = borrowed_match.group(1).strip() if borrowed_match else ""
-
-            borrowed_date = None
-            borrowed_library = borrowed_info
-            date_match = re.search(r"(\d{4}-\d{2}-\d{2})", borrowed_info)
-            if date_match:
-                date_str = date_match.group(1)
-                try:
-                    datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=UTC)
-                    borrowed_date = date_str
+                    publication_year = int(year_text)
                 except ValueError:
-                    borrowed_date = None
-                borrowed_library = borrowed_info.replace(date_str, "").strip()
-
-            due_date = None
-            status_text = ""
-            for cell in cells:
-                inner_text = cell.get_text(strip=True)
-                if re.match(r"^\d{4}-\d{2}-\d{2}$", inner_text):
-                    try:
-                        datetime.strptime(inner_text, "%Y-%m-%d").replace(tzinfo=UTC)
-                        due_date = inner_text
-                    except ValueError:
-                        due_date = None
-                elif "låna om" in inner_text.lower() or "omlån" in inner_text.lower():
-                    status_text = inner_text
-
-            if not status_text and len(cells) > 1:
-                status_text = cells[-1].get_text(strip=True)
-
-            can_renew = (
-                "kan inte lånas om" not in status_text.lower() if status_text else True
+                    publication_year = None
+            branch_node = row.select_one(".arena-renewal-branch .arena-value")
+            if branch_node is None:
+                branch_node = row.select_one(".arena-record-branch .arena-value")
+            borrowed_from, borrowed_date = self._split_branch_date(
+                self._node_text(branch_node)
             )
-            renewal_count = None
-            if status_text:
-                renewal_match = re.search(
-                    r"(?:Återstående antal omlån|omlån):\s*(\d+)",
-                    status_text,
-                    re.IGNORECASE,
-                )
-                if renewal_match:
-                    try:
-                        renewal_count = int(renewal_match.group(1))
-                    except ValueError, IndexError:
-                        renewal_count = None
-
+            status_text = self._node_text(
+                row.select_one(".arena-renewal-status-message")
+            )
+            renewal_count = self._parse_remaining_renewals(status_text)
+            renew_url = self._extract_renew_url(row)
             checkbox = row.find("input", {"name": "loansCheckboxGroup"})
-            checkbox_value = checkbox.get("value") if checkbox else None
-
-            # Per-row "Låna om" is a GET to a Wicket ILinkListener link embedded
-            # in the submit button's onclick (window.location.href='...').
-            renew_url = None
-            for submit in row.find_all("input", {"type": "submit"}):
-                onclick = submit.get("onclick", "")
-                href_match = re.search(
-                    r"window\.location\.href\s*=\s*'([^']+renewLoan[^']*)'", onclick
-                )
-                if href_match:
-                    renew_url = href_match.group(1)
-                    break
-
             rows_data.append(
                 {
                     "loan_id": loan_id,
-                    "title": title,
-                    "author": author,
-                    "publication_year": year,
-                    "media_type": media_type,
-                    "borrowed_from": borrowed_library,
+                    "title": self._node_text(row.select_one(".arena-record-title")),
+                    "author": self._node_text(
+                        row.select_one(".arena-record-author .arena-value")
+                    ),
+                    "publication_year": publication_year,
+                    "media_type": self._node_text(
+                        row.select_one(".arena-record-media .arena-value")
+                    ),
+                    "borrowed_from": borrowed_from,
                     "borrowed_date": borrowed_date,
-                    "due_date": due_date,
+                    "due_date": self._parse_date_field(
+                        self._first_iso_date(
+                            self._node_text(row.select_one(".arena-renewal-date-value"))
+                        )
+                    ),
                     "status": status_text,
-                    "can_renew": can_renew,
+                    "can_renew": (
+                        "arena-renewal-true" in classes
+                        and bool(renew_url)
+                        and renewal_count != 0
+                    ),
                     "renewal_count": renewal_count,
-                    "checkbox_value": checkbox_value,
+                    "overdue": "arena-loan-overdue-true" in classes,
+                    "checkbox_value": checkbox.get("value") if checkbox else None,
                     "renew_url": renew_url,
                 }
             )
@@ -1056,7 +1168,15 @@ class HelgebibliotekenApiClient:
     def _extract_feedback_messages(self, soup: BeautifulSoup) -> list[str]:
         """Extract feedback messages from common alert/message containers."""
         messages: list[str] = []
-        for selector in ("div.feedbackPanel", "div.alert", "li.feedbackPanelERROR"):
+        for selector in (
+            ".arena-feedback",
+            ".feedbackPanelINFO",
+            ".feedbackPanelERROR",
+            ".feedbackPanelWARNING",
+            "div.feedbackPanel",
+            "div.alert",
+            "li.feedbackPanelERROR",
+        ):
             for node in soup.select(selector):
                 text = node.get_text(" ", strip=True)
                 if text and text not in messages:
@@ -1085,6 +1205,7 @@ class HelgebibliotekenApiClient:
                 "status": row["status"],
                 "can_renew": row["can_renew"],
                 "renewal_count": row["renewal_count"],
+                "overdue": row["overdue"],
             }
             _LOGGER.debug(
                 "Parsed loan: %s by %s (due: %s)",
@@ -1182,9 +1303,17 @@ class HelgebibliotekenApiClient:
                 "reservation_type": values.get("Reservationstyp", ""),
                 "valid_from": self._parse_date_field(values.get("Giltig från", "")),
                 "valid_to": self._parse_date_field(values.get("Giltig till", "")),
-                "pickup_number": values.get("Löpnummer", ""),
+                "pickup_number": (
+                    values.get("Löpnummer")
+                    or values.get("Expeditionsnummer")
+                    or values.get("Hämtnummer")
+                    or ""
+                ),
                 "pickup_expiry_date": self._parse_date_field(
-                    values.get("Hämtas senast", "")
+                    values.get("Hämtas senast")
+                    or values.get("Hämta senast")
+                    or values.get("Hämtas före")
+                    or ""
                 ),
                 "status": values.get("Status", ""),
             }
@@ -1206,14 +1335,9 @@ class HelgebibliotekenApiClient:
     async def _fetch_overview_rows(self) -> list[dict[str, Any]]:
         """Fetch the overview page and return parsed loan rows."""
         current_url = f"{self.BASE_URL}/protected/my-account/overview"
-        async with asyncio.timeout(TIMEOUT):
-            async with self._session.get(current_url) as response:
-                _verify_response_or_raise(response)
-                html = await response.text()
+        html, _final_url = await self._async_request(current_url)
         soup = BeautifulSoup(html, "html.parser")
-        if "du har inte loggat in" in html.lower():
-            self._logged_in = False
-            _raise_session_expired()
+        self._verify_overview_logged_in(html)
         loans_portlet = self._find_loans_portlet(soup)
         if not loans_portlet:
             msg = "Could not find loans portlet"
@@ -1235,13 +1359,14 @@ class HelgebibliotekenApiClient:
         before_count = row.get("renewal_count")
         renew_url = urljoin(current_url, row["renew_url"])
 
-        async with asyncio.timeout(TIMEOUT):
-            async with self._session.get(renew_url, allow_redirects=True) as response:
-                _verify_response_or_raise(response)
-                renew_html = await response.text()
-        feedback = self._extract_feedback_messages(
-            BeautifulSoup(renew_html, "html.parser")
-        )
+        renew_html, _renew_url = await self._async_request(renew_url)
+        renew_soup = BeautifulSoup(renew_html, "html.parser")
+        feedback = self._extract_feedback_messages(renew_soup)
+        feedback_text = " ".join(feedback).lower()
+        if renew_soup.select(".arena-renewal-fail") or any(
+            phrase in feedback_text for phrase in _RENEW_ERROR_PHRASES
+        ):
+            return False, feedback
 
         after_rows = await self._fetch_overview_rows()
         after = next((r for r in after_rows if r.get("loan_id") == loan_id), None)
@@ -1263,7 +1388,10 @@ class HelgebibliotekenApiClient:
             and after_count is not None
             and after_count < before_count
         )
-        return (due_advanced or count_decreased), feedback
+        marked_success = bool(renew_soup.select(".arena-renewal-success")) or any(
+            phrase in feedback_text for phrase in _RENEW_SUCCESS_PHRASES
+        )
+        return (due_advanced or count_decreased or marked_success), feedback
 
     def _classify_requested(
         self,
@@ -1323,7 +1451,7 @@ class HelgebibliotekenApiClient:
                             result["feedback"].append(message)
                     bucket = "renewed" if renewed else "failed"
                     result[bucket].append(loan_id)
-            except HelgebibliotekenApiClientAuthenticationError:
+            except HelgebibliotekenApiClientSessionExpiredError:
                 if attempt == 0:
                     _LOGGER.warning(
                         "Session expired during renewal, re-logging in, retrying"
@@ -1366,19 +1494,27 @@ class HelgebibliotekenApiClient:
     async def async_renew_due_soon(self, days: int = 3) -> dict[str, Any]:
         """Renew all renewable loans overdue or due within N days."""
         loans = await self.async_get_loans()
-        today = datetime.now(UTC).date()
+        today = dt_util.now().date()
         due_soon_ids: list[str] = []
         for loan in loans:
             loan_id = loan.get("loan_id")
             due_date = loan.get("due_date")
-            if not loan_id or not due_date or loan.get("can_renew") is False:
+            if not loan_id or loan.get("can_renew") is False:
+                continue
+            loan_key = str(loan_id)
+            if loan_key in due_soon_ids:
+                continue
+            if loan.get("overdue") is True:
+                due_soon_ids.append(loan_key)
+                continue
+            if not due_date:
                 continue
             try:
                 due = date.fromisoformat(due_date)
             except TypeError, ValueError:
                 continue
-            if (due - today).days <= days and str(loan_id) not in due_soon_ids:
-                due_soon_ids.append(str(loan_id))
+            if (due - today).days <= days:
+                due_soon_ids.append(loan_key)
 
         if not due_soon_ids:
             return {
