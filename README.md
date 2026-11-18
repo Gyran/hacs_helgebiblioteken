@@ -17,17 +17,15 @@ A Home Assistant custom integration for HelGe-biblioteken that allows you to tra
 
 ## Installation
 
-### HACS (Recommended)
+Requires Home Assistant 2026.11 or newer.
 
-1. Open HACS in Home Assistant
-2. Go to Integrations
-3. Click the three dots menu (⋮) in the top right
-4. Select "Custom repositories"
-5. Add this repository URL: `https://github.com/gyran/hacs_helgebiblioteken`
-6. Select "Integration" as the category
-7. Click "Add"
-8. Search for "Helgebiblioteken" and install it
-9. Restart Home Assistant
+### Marketplace (Recommended)
+
+1. In Home Assistant, go to **Settings → Marketplace**
+2. Search for "Helgebiblioteken" and install it
+3. Restart Home Assistant
+
+If it is not listed yet, add it from its link: in **Settings → Marketplace**, select **Add from link** (upper right), enter `gyran/hacs_helgebiblioteken`, select **Add**, then open it in the list and install it. The Marketplace asks you to connect GitHub the first time you add a repository this way.
 
 ### Manual Installation
 
@@ -57,9 +55,9 @@ YAML-mode dashboards cannot be updated from storage. Add the resources yourself:
 ```yaml
 lovelace:
   resources:
-    - url: /helgebiblioteken/helgebiblioteken-loans-card.js?v=0.6.6
+    - url: /helgebiblioteken/helgebiblioteken-loans-card.js?v=0.7.0
       type: module
-    - url: /helgebiblioteken/helgebiblioteken-reservations-card.js?v=0.6.6
+    - url: /helgebiblioteken/helgebiblioteken-reservations-card.js?v=0.7.0
       type: module
 ```
 

@@ -24,7 +24,7 @@
         },
         "abort": {
             "already_configured": "Denna konfiguration är redan konfigurerad.",
-            "reauth_failed_missing_entry": "Omautentisering misslyckades: kunde inte hitta konfigurationsposten.",
+            "wrong_account": "Uppgifterna tillhör ett annat bibliotekskonto.",
             "reauth_successful": "Omautentiseringen lyckades."
         }
     },
