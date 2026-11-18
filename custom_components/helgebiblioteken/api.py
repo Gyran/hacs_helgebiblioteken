@@ -64,6 +64,12 @@ class HelgebibliotekenApiClientSessionExpiredError(
     """Exception to indicate the portal session expired."""
 
 
+class HelgebibliotekenApiClientLoanNotRenewableError(
+    HelgebibliotekenApiClientError,
+):
+    """Exception for a loan ID that is unknown, ambiguous, or not renewable."""
+
+
 _CREDENTIAL_ERROR_PHRASES = (
     "felaktigt",
     "fel personnummer",
@@ -173,6 +179,13 @@ def _visible_login_text(soup: BeautifulSoup) -> str:
     return source.get_text(" ", strip=True).lower()
 
 
+async def _async_parse_html(html: str) -> BeautifulSoup:
+    """Parse HTML in the default executor; Arena pages are large enough to block."""
+    return await asyncio.get_running_loop().run_in_executor(
+        None, BeautifulSoup, html, "html.parser"
+    )
+
+
 class HelgebibliotekenApiClient:
     """API Client for HelGe-biblioteken."""
 
@@ -189,6 +202,9 @@ class HelgebibliotekenApiClient:
         self._password = password  # PIN
         self._session = session
         self._logged_in = False
+        # One portal session per client: polls and renewals must not interleave,
+        # since login clears the cookie jar.
+        self._lock = asyncio.Lock()
 
     async def _async_request(
         self,
@@ -261,7 +277,7 @@ class HelgebibliotekenApiClient:
             async with asyncio.timeout(TIMEOUT):
                 html, _login_page_url = await self._async_request(f"{self.BASE_URL}/")
                 _LOGGER.debug("Login page HTML length: %d bytes", len(html))
-                soup = BeautifulSoup(html, "html.parser")
+                soup = await _async_parse_html(html)
 
                 # Find the actual login form to get the correct action URL
                 login_form = None
@@ -384,7 +400,9 @@ class HelgebibliotekenApiClient:
                 )
                 _LOGGER.debug("Login response final URL: %s", final_url)
                 _LOGGER.debug("Login response HTML length: %d bytes", len(html))
-                self._verify_login_success(html, final_url)
+                self._verify_login_success(
+                    html, final_url, await _async_parse_html(html)
+                )
 
                 # Verify session by trying to access protected page
                 _LOGGER.debug("Verifying session by accessing protected page")
@@ -624,10 +642,13 @@ class HelgebibliotekenApiClient:
 
         return form_fields
 
-    def _verify_login_success(self, html: str, final_url: str) -> None:
+    def _verify_login_success(
+        self, html: str, final_url: str, soup: BeautifulSoup | None = None
+    ) -> None:
         """Verify that login was successful."""
         url_lower = final_url.lower()
-        soup = BeautifulSoup(html, "html.parser")
+        if soup is None:
+            soup = BeautifulSoup(html, "html.parser")
 
         # Success URL or patron markers first. Do not scan whole HTML for
         # generic "error"/"invalid".
@@ -677,7 +698,7 @@ class HelgebibliotekenApiClient:
         """Fetch an overview page and return HTML plus parsed soup."""
         html, _final_url = await self._async_request(url)
         _LOGGER.debug("Overview page HTML length: %d bytes", len(html))
-        return html, BeautifulSoup(html, "html.parser")
+        return html, await _async_parse_html(html)
 
     def _verify_overview_logged_in(self, html: str) -> None:
         """Raise if the overview page indicates the session expired."""
@@ -771,7 +792,20 @@ class HelgebibliotekenApiClient:
             return None, page_num + 1
         return next_url, page_num + 1
 
-    async def _async_get_account_data(  # noqa: PLR0912, PLR0915
+    async def _async_get_account_data(
+        self,
+        *,
+        include_loans: bool = True,
+        include_reservations: bool = True,
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        """Fetch loans and reservations while holding the session lock."""
+        async with self._lock:
+            return await self._async_get_account_data_locked(
+                include_loans=include_loans,
+                include_reservations=include_reservations,
+            )
+
+    async def _async_get_account_data_locked(  # noqa: PLR0912, PLR0915
         self,
         *,
         include_loans: bool = True,
@@ -1336,7 +1370,7 @@ class HelgebibliotekenApiClient:
         """Fetch the overview page and return parsed loan rows."""
         current_url = f"{self.BASE_URL}/protected/my-account/overview"
         html, _final_url = await self._async_request(current_url)
-        soup = BeautifulSoup(html, "html.parser")
+        soup = await _async_parse_html(html)
         self._verify_overview_logged_in(html)
         loans_portlet = self._find_loans_portlet(soup)
         if not loans_portlet:
@@ -1360,7 +1394,7 @@ class HelgebibliotekenApiClient:
         renew_url = urljoin(current_url, row["renew_url"])
 
         renew_html, _renew_url = await self._async_request(renew_url)
-        renew_soup = BeautifulSoup(renew_html, "html.parser")
+        renew_soup = await _async_parse_html(renew_html)
         feedback = self._extract_feedback_messages(renew_soup)
         feedback_text = " ".join(feedback).lower()
         if renew_soup.select(".arena-renewal-fail") or any(
@@ -1418,7 +1452,12 @@ class HelgebibliotekenApiClient:
                 selectable_ids.append(loan_id)
         return selectable_ids
 
-    async def async_renew_loans(  # noqa: PLR0912
+    async def async_renew_loans(self, loan_ids: list[str]) -> dict[str, Any]:
+        """Renew selected loans while holding the session lock."""
+        async with self._lock:
+            return await self._async_renew_loans_locked(loan_ids)
+
+    async def _async_renew_loans_locked(  # noqa: PLR0912
         self, loan_ids: list[str]
     ) -> dict[str, Any]:
         """Renew selected loans by loan ID(s), one Wicket renewal link per loan."""
@@ -1489,7 +1528,8 @@ class HelgebibliotekenApiClient:
             msg = f"Loan ID {loan_id} cannot be renewed"
         else:
             msg = f"Renewal failed for loan ID {loan_id}"
-        raise HelgebibliotekenApiClientError(msg)
+            raise HelgebibliotekenApiClientError(msg)
+        raise HelgebibliotekenApiClientLoanNotRenewableError(msg)
 
     async def async_renew_due_soon(self, days: int = 3) -> dict[str, Any]:
         """Renew all renewable loans overdue or due within N days."""

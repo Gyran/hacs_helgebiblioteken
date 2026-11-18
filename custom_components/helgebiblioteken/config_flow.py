@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 
 import aiohttp
-import voluptuous as vol
+import probatio as vol
 from aiohttp.resolver import ThreadedResolver
 from homeassistant import config_entries
 from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
@@ -110,10 +110,7 @@ class HelgebibliotekenFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
         """Confirm reauthentication with updated credentials."""
         _errors = {}
 
-        try:
-            reauth_entry = self._get_reauth_entry()
-        except ValueError, KeyError:
-            return self.async_abort(reason="reauth_failed_missing_entry")
+        reauth_entry = self._get_reauth_entry()
 
         if user_input is not None:
             personnummer = _normalize_personnummer(user_input[CONF_USERNAME])
@@ -135,20 +132,17 @@ class HelgebibliotekenFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                     LOGGER.exception(exception)
                     _errors["base"] = "unknown"
                 else:
-                    self.hass.config_entries.async_update_entry(
+                    await self.async_set_unique_id(personnummer)
+                    self._abort_if_unique_id_mismatch(reason="wrong_account")
+                    return self.async_update_reload_and_abort(
                         reauth_entry,
-                        data={
-                            **reauth_entry.data,
+                        data_updates={
                             CONF_USERNAME: personnummer,
                             CONF_PASSWORD: user_input[CONF_PASSWORD],
                         },
                     )
-                    await self.hass.config_entries.async_reload(reauth_entry.entry_id)
-                    return self.async_abort(reason="reauth_successful")
 
-        username_default = vol.UNDEFINED
-        if hasattr(reauth_entry, "data"):
-            username_default = reauth_entry.data.get(CONF_USERNAME, vol.UNDEFINED)
+        username_default = reauth_entry.data.get(CONF_USERNAME, vol.UNDEFINED)
 
         return self.async_show_form(
             step_id="reauth_confirm",
@@ -174,26 +168,6 @@ class HelgebibliotekenFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
             ),
             errors=_errors,
         )
-
-    def _get_reauth_entry(self) -> config_entries.ConfigEntry:
-        """Get the entry being reauth'd."""
-        # Try to get entry_id from context
-        entry_id = self.context.get("entry_id")
-        if entry_id:
-            entry = self.hass.config_entries.async_get_entry(entry_id)
-            if entry:
-                return entry
-        # Fallback: try to get from context directly
-        if "entry" in self.context:
-            return self.context["entry"]
-        # Last resort: get from unique_id if available
-        if "unique_id" in self.context:
-            for entry in self.hass.config_entries.async_entries(DOMAIN):
-                if entry.unique_id == self.context["unique_id"]:
-                    return entry
-        # If still not found, raise an error
-        msg = "Could not find reauth entry"
-        raise ValueError(msg)
 
     async def _test_credentials(self, username: str, password: str) -> None:
         """Validate credentials."""
