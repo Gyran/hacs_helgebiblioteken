@@ -19,3 +19,7 @@ coverage.xml
 config/*
 !config/configuration.yaml
 config.bak-*/
+
+# Debug captures (may contain account data)
+debug_html/
+.claude/settings.local.json

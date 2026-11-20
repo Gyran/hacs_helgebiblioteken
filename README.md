@@ -2,6 +2,12 @@
 
 ![Helgebiblioteken logo](custom_components/helgebiblioteken/brand/logo.png)
 
+[![HACS Custom](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://hacs.xyz)
+[![Release](https://img.shields.io/github/v/release/gyran/hacs_helgebiblioteken)](https://github.com/gyran/hacs_helgebiblioteken/releases)
+[![Lint](https://github.com/gyran/hacs_helgebiblioteken/actions/workflows/lint.yml/badge.svg)](https://github.com/gyran/hacs_helgebiblioteken/actions/workflows/lint.yml)
+[![Validate](https://github.com/gyran/hacs_helgebiblioteken/actions/workflows/validate.yml/badge.svg)](https://github.com/gyran/hacs_helgebiblioteken/actions/workflows/validate.yml)
+[![License: MIT](https://img.shields.io/github/license/gyran/hacs_helgebiblioteken)](LICENSE)
+
 A Home Assistant custom integration for HelGe-biblioteken that allows you to track your library loans, reservations, and due dates.
 
 ## Features
@@ -13,6 +19,7 @@ A Home Assistant custom integration for HelGe-biblioteken that allows you to tra
 - Custom Lovelace cards for loans and reservations
 - Renew loans from Home Assistant or the loans card
 - Manual refresh button
+- Reauthentication flow and downloadable diagnostics for bug reports
 - Automatic updates every hour
 
 ## Installation
