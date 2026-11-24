@@ -62,9 +62,9 @@ YAML-mode dashboards cannot be updated from storage. Add the resources yourself:
 ```yaml
 lovelace:
   resources:
-    - url: /helgebiblioteken/helgebiblioteken-loans-card.js?v=0.7.1
+    - url: /helgebiblioteken/helgebiblioteken-loans-card.js?v=0.7.2
       type: module
-    - url: /helgebiblioteken/helgebiblioteken-reservations-card.js?v=0.7.1
+    - url: /helgebiblioteken/helgebiblioteken-reservations-card.js?v=0.7.2
       type: module
 ```
 

@@ -249,6 +249,4 @@ class LastUpdateSensor(HelgebibliotekenEntity, SensorEntity):
     @property
     def native_value(self) -> datetime | None:
         """Return the last update time."""
-        if not self.coordinator.last_update_success:
-            return None
         return self.coordinator.last_update_time

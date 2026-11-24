@@ -34,6 +34,11 @@ class HelgebibliotekenEntity(CoordinatorEntity[HelgebibliotekenDataUpdateCoordin
         )
 
     @property
+    def available(self) -> bool:
+        """Stay available with the last known data after a failed refresh."""
+        return self.coordinator.data is not None
+
+    @property
     def suggested_object_id(self) -> str | None:
         """Return object_id with prefix (e.g. sensor.helgebiblioteken_loan_count)."""
         if hasattr(self, "entity_description") and self.entity_description.key:

@@ -3,6 +3,11 @@
 Release notes for each version are also published on the
 [GitHub releases page](https://github.com/gyran/hacs_helgebiblioteken/releases).
 
+## 0.7.2
+
+- Keep showing the last known loans and reservations when a refresh fails, instead of marking all entities unavailable.
+- The "Last Update" sensor now keeps showing the time of the last successful refresh.
+
 ## 0.7.1
 
 - Add downloadable, redacted diagnostics for bug reports.
